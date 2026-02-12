@@ -1,7 +1,7 @@
 defmodule RustyCSV.MixProject do
   use Mix.Project
 
-  @version "0.3.7"
+  @version "0.3.8"
   @source_url "https://github.com/jeffhuen/rustycsv"
 
   def project do

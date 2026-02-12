@@ -1,6 +1,6 @@
 [package]
 name = "rustycsv"
-version = "0.3.7"
+version = "0.3.8"
 authors = ["Jeff Huen"]
 edition = "2021"
 
@@ -13,6 +13,9 @@ crate-type = ["cdylib", "lib"]
 rustler = { git = "https://github.com/rusterlium/rustler.git", branch = "master" }
 rayon = "1.10"    # Data parallelism for parallel parsing
 mimalloc = { version = "0.1", default-features = false, optional = true }
+
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false, optional = true, features = ["local_dynamic_tls"] }
 
 [features]
 default = ["mimalloc"]

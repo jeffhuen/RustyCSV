@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-02-11
+
+### Added
+
+- **musl/alpine compatibility** — added target-specific dependency for `mimalloc` on `musl` targets with the `local_dynamic_tls` feature enabled. This ensures stable support and prevents potential issues with thread-local storage when running in Alpine Linux containers (e.g., standard Elixir docker images).
+
 ## [0.3.7] - 2026-02-03
 
 ### Fixed
