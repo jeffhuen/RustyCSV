@@ -42,6 +42,10 @@ pub(crate) fn get_pool() -> Option<&'static rayon::ThreadPool> {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(recommended_threads())
                 .thread_name(|i| format!("rustycsv-{i}"))
+                // Reduce per-thread stack from the 8 MiB default to 2 MiB.
+                // CSV field extraction has shallow call stacks; the default
+                // wastes ~48 MiB of virtual memory across 8 persistent threads.
+                .stack_size(2 * 1024 * 1024)
                 .build()
                 .ok()
         })

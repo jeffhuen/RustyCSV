@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 
+use super::streaming::shrink_excess;
 use crate::core::newlines::{match_newline, Newlines};
 
 // ============================================================================
@@ -187,6 +188,7 @@ fn parse_row_general<'a>(
 
 /// Field boundary for general parsing
 #[derive(Debug, Clone, Copy)]
+#[must_use]
 pub struct GeneralFieldBound {
     pub start: usize,
     pub end: usize,
@@ -546,6 +548,7 @@ fn parse_row_boundaries_general(
 // ============================================================================
 
 /// Streaming parser that handles multi-byte separators and escapes
+#[must_use]
 pub struct GeneralStreamingParser {
     buffer: Vec<u8>,
     complete_rows: Vec<Vec<Vec<u8>>>,
@@ -658,22 +661,28 @@ impl GeneralStreamingParser {
             self.buffer.drain(0..self.partial_row_start);
             self.scan_pos -= self.partial_row_start;
             self.partial_row_start = 0;
+            shrink_excess(&mut self.buffer);
         }
     }
 
     pub fn take_rows(&mut self, max: usize) -> Vec<Vec<Vec<u8>>> {
         let take_count = max.min(self.complete_rows.len());
-        self.complete_rows.drain(0..take_count).collect()
+        let rows: Vec<_> = self.complete_rows.drain(0..take_count).collect();
+        shrink_excess(&mut self.complete_rows);
+        rows
     }
 
+    #[must_use]
     pub fn available_rows(&self) -> usize {
         self.complete_rows.len()
     }
 
+    #[must_use]
     pub fn has_partial(&self) -> bool {
         self.partial_row_start < self.buffer.len()
     }
 
+    #[must_use]
     pub fn buffer_size(&self) -> usize {
         self.buffer.len()
     }
@@ -684,8 +693,11 @@ impl GeneralStreamingParser {
             if !row.is_empty() {
                 self.complete_rows.push(row);
             }
-            self.partial_row_start = self.buffer.len();
         }
+        // Release the buffer — parsing is done
+        self.buffer = Vec::new();
+        self.partial_row_start = 0;
+        self.scan_pos = 0;
         std::mem::take(&mut self.complete_rows)
     }
 }
@@ -1199,6 +1211,7 @@ fn parse_row_boundaries_general_with_newlines(
 }
 
 /// Streaming parser with custom newline support.
+#[must_use]
 pub struct GeneralStreamingParserNewlines {
     buffer: Vec<u8>,
     complete_rows: Vec<Vec<Vec<u8>>>,
@@ -1317,22 +1330,28 @@ impl GeneralStreamingParserNewlines {
             self.buffer.drain(0..self.partial_row_start);
             self.scan_pos -= self.partial_row_start;
             self.partial_row_start = 0;
+            shrink_excess(&mut self.buffer);
         }
     }
 
     pub fn take_rows(&mut self, max: usize) -> Vec<Vec<Vec<u8>>> {
         let take_count = max.min(self.complete_rows.len());
-        self.complete_rows.drain(0..take_count).collect()
+        let rows: Vec<_> = self.complete_rows.drain(0..take_count).collect();
+        shrink_excess(&mut self.complete_rows);
+        rows
     }
 
+    #[must_use]
     pub fn available_rows(&self) -> usize {
         self.complete_rows.len()
     }
 
+    #[must_use]
     pub fn has_partial(&self) -> bool {
         self.partial_row_start < self.buffer.len()
     }
 
+    #[must_use]
     pub fn buffer_size(&self) -> usize {
         self.buffer.len()
     }
@@ -1343,8 +1362,11 @@ impl GeneralStreamingParserNewlines {
             if !row.is_empty() {
                 self.complete_rows.push(row);
             }
-            self.partial_row_start = self.buffer.len();
         }
+        // Release the buffer — parsing is done
+        self.buffer = Vec::new();
+        self.partial_row_start = 0;
+        self.scan_pos = 0;
         std::mem::take(&mut self.complete_rows)
     }
 }

@@ -12,6 +12,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 rustler = { git = "https://github.com/rusterlium/rustler.git", branch = "master" }
 rayon = "1.10"    # Data parallelism for parallel parsing
+thiserror = "2"   # Idiomatic error types for library code
 mimalloc = { version = "0.1", default-features = false, optional = true }
 
 [target.'cfg(target_env = "musl")'.dependencies]

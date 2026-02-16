@@ -5,6 +5,7 @@
 
 /// A newline terminator position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub struct RowEnd {
     /// Byte position of terminator start (\n or \r in \r\n).
     pub pos: u32,
@@ -14,6 +15,7 @@ pub struct RowEnd {
 
 /// Structural index: positions of all unquoted separators and row endings.
 #[derive(Debug)]
+#[must_use]
 pub struct StructuralIndex {
     /// Positions of unquoted field separators (commas, tabs, etc.).
     pub field_seps: Vec<u32>,
@@ -58,6 +60,7 @@ impl StructuralIndex {
 
     /// Number of rows.
     #[inline]
+    #[must_use]
     pub fn row_count(&self) -> usize {
         let n = self.row_ends.len();
         // If there's content after the last row_end (no trailing newline), there's one more row.
@@ -130,6 +133,7 @@ impl<'a> Iterator for RowIter<'a> {
                 let start = self.pos;
                 let end = self.index.input_len;
                 self.pos = end;
+                self.row_idx += 1;
                 Some((start, end, end))
             } else {
                 None
@@ -143,6 +147,8 @@ impl<'a> Iterator for RowIter<'a> {
         (remaining, Some(remaining))
     }
 }
+
+impl ExactSizeIterator for RowIter<'_> {}
 
 /// A single row from the cursor-based iterator, with its field bounds.
 pub struct Row<'a> {
@@ -177,6 +183,7 @@ impl<'a> Iterator for RowFieldIter<'a> {
             let start = self.pos;
             let end = self.index.input_len;
             self.pos = end;
+            self.row_idx += 1;
             (start, end)
         } else {
             return None;
@@ -209,6 +216,8 @@ impl<'a> Iterator for RowFieldIter<'a> {
         (remaining, Some(remaining))
     }
 }
+
+impl ExactSizeIterator for RowFieldIter<'_> {}
 
 /// Iterator over fields in a single row.
 pub struct FieldIter<'a> {
@@ -249,10 +258,15 @@ impl<'a> Iterator for FieldIter<'a> {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.done {
+            return (0, Some(0));
+        }
         let remaining = (self.seps.len() + 1).saturating_sub(self.idx);
         (remaining, Some(remaining))
     }
 }
+
+impl ExactSizeIterator for FieldIter<'_> {}
 
 #[cfg(test)]
 mod tests {
@@ -372,5 +386,75 @@ mod tests {
         assert_eq!(cursor.len(), 2);
         assert_eq!(cursor[0], vec![(0, 1), (2, 3)]); // a,b
         assert_eq!(cursor[1], vec![(4, 5)]); // c
+    }
+
+    // --- ExactSizeIterator correctness tests ---
+
+    #[test]
+    fn row_iter_exact_size_with_trailing_row() {
+        // "a\nb" — 2 rows, second has no trailing newline
+        let idx = make_index(vec![], vec![RowEnd { pos: 1, len: 1 }], 3);
+        let mut iter = idx.rows();
+
+        assert_eq!(iter.len(), 2);
+        let _ = iter.next(); // consume row 1
+        assert_eq!(iter.len(), 1);
+        let _ = iter.next(); // consume trailing row
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn row_iter_exact_size_no_trailing_row() {
+        // "a\n" — 1 row with trailing newline
+        let idx = make_index(vec![], vec![RowEnd { pos: 1, len: 1 }], 2);
+        let mut iter = idx.rows();
+
+        assert_eq!(iter.len(), 1);
+        let _ = iter.next();
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn row_field_iter_exact_size_with_trailing_row() {
+        // "a\nb" — 2 rows, second has no trailing newline
+        let idx = make_index(vec![], vec![RowEnd { pos: 1, len: 1 }], 3);
+        let mut iter = idx.rows_with_fields();
+
+        assert_eq!(iter.len(), 2);
+        let _ = iter.next();
+        assert_eq!(iter.len(), 1);
+        let _ = iter.next(); // trailing row
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn field_iter_exact_size_single_field() {
+        // Row "abc" — 1 field, no separators
+        let idx = make_index(vec![], vec![RowEnd { pos: 3, len: 1 }], 4);
+        let mut fields = idx.fields_in_row(0, 3);
+
+        assert_eq!(fields.len(), 1);
+        let _ = fields.next(); // consume the only field
+        assert_eq!(fields.len(), 0);
+        assert!(fields.next().is_none());
+    }
+
+    #[test]
+    fn field_iter_exact_size_multiple_fields() {
+        // Row "a,b,c" — 3 fields, seps at 1 and 3
+        let idx = make_index(vec![1, 3], vec![RowEnd { pos: 5, len: 1 }], 6);
+        let mut fields = idx.fields_in_row(0, 5);
+
+        assert_eq!(fields.len(), 3);
+        let _ = fields.next(); // field "a"
+        assert_eq!(fields.len(), 2);
+        let _ = fields.next(); // field "b"
+        assert_eq!(fields.len(), 1);
+        let _ = fields.next(); // field "c" (last, sets done=true)
+        assert_eq!(fields.len(), 0);
+        assert!(fields.next().is_none());
     }
 }

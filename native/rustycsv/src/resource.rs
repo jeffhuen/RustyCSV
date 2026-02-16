@@ -74,6 +74,7 @@ impl StreamingParserEnum {
 }
 
 /// Wrapper for StreamingParser that can be stored in a ResourceArc
+#[must_use]
 pub struct StreamingParserResource {
     pub inner: Mutex<StreamingParserEnum>,
 }

@@ -13,11 +13,29 @@ use crate::core::{extract_field_owned_with_escape, is_separator};
 /// Default maximum buffer size for streaming parsers (256 MB).
 pub const DEFAULT_MAX_BUFFER: usize = 256 * 1024 * 1024;
 
+/// Shrink a Vec's capacity when it greatly exceeds its length.
+///
+/// `Vec::drain` and `Vec::clear` preserve the original allocation. For
+/// long-lived streaming parsers this causes memory to grow monotonically
+/// to its peak usage and never return to the OS. This helper reclaims
+/// that excess when capacity exceeds 4× length (with a 1 KiB floor,
+/// measured in bytes, to avoid thrashing on small buffers).
+pub(crate) fn shrink_excess<T>(v: &mut Vec<T>) {
+    let len = v.len();
+    let floor_elements = 1024 / std::mem::size_of::<T>().max(1);
+    if v.capacity() > len.saturating_mul(4).max(floor_elements) {
+        v.shrink_to(len.saturating_mul(2));
+    }
+}
+
 /// Error returned when a streaming `feed()` would exceed the buffer limit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("streaming buffer overflow: feed would exceed maximum buffer size")]
+#[must_use]
 pub struct BufferOverflow;
 
 /// State for streaming CSV parser
+#[must_use]
 pub struct StreamingParser {
     /// Buffer holding unprocessed data
     buffer: Vec<u8>,
@@ -220,26 +238,36 @@ impl StreamingParser {
             // Adjust positions after compaction
             self.scan_pos -= self.partial_row_start;
             self.partial_row_start = 0;
+            // Release excess capacity to prevent unbounded memory growth.
+            // Vec::drain preserves the original allocation even after removing
+            // most data, causing the buffer to hold its peak capacity forever.
+            shrink_excess(&mut self.buffer);
         }
     }
 
     /// Take up to `max` complete rows from the parser
     pub fn take_rows(&mut self, max: usize) -> Vec<Vec<Vec<u8>>> {
         let take_count = max.min(self.complete_rows.len());
-        self.complete_rows.drain(0..take_count).collect()
+        let rows: Vec<_> = self.complete_rows.drain(0..take_count).collect();
+        // Prevent complete_rows from retaining peak capacity after draining
+        shrink_excess(&mut self.complete_rows);
+        rows
     }
 
     /// Check how many complete rows are available
+    #[must_use]
     pub fn available_rows(&self) -> usize {
         self.complete_rows.len()
     }
 
     /// Check if there's a partial row in the buffer
+    #[must_use]
     pub fn has_partial(&self) -> bool {
         self.partial_row_start < self.buffer.len()
     }
 
     /// Get the size of buffered data (for memory monitoring)
+    #[must_use]
     pub fn buffer_size(&self) -> usize {
         self.buffer.len()
     }
@@ -252,8 +280,12 @@ impl StreamingParser {
             if !row.is_empty() {
                 self.complete_rows.push(row);
             }
-            self.partial_row_start = self.buffer.len();
         }
+
+        // Release the buffer — parsing is done, no need to hold this memory
+        self.buffer = Vec::new();
+        self.partial_row_start = 0;
+        self.scan_pos = 0;
 
         // Take all remaining rows
         std::mem::take(&mut self.complete_rows)
@@ -262,8 +294,9 @@ impl StreamingParser {
     /// Reset the parser state
     #[allow(dead_code)]
     pub fn reset(&mut self) {
-        self.buffer.clear();
-        self.complete_rows.clear();
+        // Use = Vec::new() instead of .clear() to actually release memory
+        self.buffer = Vec::new();
+        self.complete_rows = Vec::new();
         self.partial_row_start = 0;
         self.scan_pos = 0;
         self.in_quotes = false;
@@ -391,5 +424,84 @@ mod tests {
 
         let rows = parser.take_rows(10);
         assert_eq!(rows[0], vec![b"a\rb".to_vec()]);
+    }
+
+    // --- Memory management tests ---
+
+    #[test]
+    fn shrink_excess_reclaims_when_capacity_exceeds_threshold() {
+        let mut v: Vec<u8> = Vec::with_capacity(8192);
+        v.push(1);
+        // capacity=8192, len=1 → 8192 > 1*4.max(1024) → should shrink
+        shrink_excess(&mut v);
+        assert!(
+            v.capacity() < 8192,
+            "capacity should have been reduced from 8192, got {}",
+            v.capacity()
+        );
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0], 1);
+    }
+
+    #[test]
+    fn shrink_excess_does_not_shrink_below_floor() {
+        let mut v: Vec<u8> = Vec::with_capacity(1024);
+        // capacity=1024, len=0 → 1024 <= 0*4.max(1024) → should NOT shrink
+        shrink_excess(&mut v);
+        assert_eq!(
+            v.capacity(),
+            1024,
+            "capacity at the floor should not be shrunk"
+        );
+    }
+
+    #[test]
+    fn shrink_excess_preserves_when_ratio_acceptable() {
+        let mut v: Vec<u8> = Vec::with_capacity(4000);
+        v.extend_from_slice(&[0u8; 2000]);
+        // capacity=4000, len=2000 → 4000 <= 2000*4.max(1024) → should NOT shrink
+        let cap_before = v.capacity();
+        shrink_excess(&mut v);
+        assert_eq!(v.capacity(), cap_before);
+    }
+
+    #[test]
+    fn shrink_excess_byte_floor_for_large_elements() {
+        // For Vec<Vec<Vec<u8>>>, size_of::<T>() = 24 bytes on 64-bit
+        // floor_elements = 1024 / 24 = 42
+        let mut v: Vec<Vec<Vec<u8>>> = Vec::with_capacity(200);
+        // capacity=200, len=0 → 200 > 0*4.max(42) → should shrink
+        shrink_excess(&mut v);
+        assert!(
+            v.capacity() < 200,
+            "should shrink large-element Vec past byte-based floor"
+        );
+    }
+
+    #[test]
+    fn finalize_releases_buffer() {
+        let mut parser = StreamingParser::new();
+        parser.feed(b"a,b,c\n1,2,3").unwrap();
+        assert!(parser.buffer_size() > 0);
+
+        let rows = parser.finalize();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            parser.buffer_size(),
+            0,
+            "buffer should be released after finalize"
+        );
+    }
+
+    #[test]
+    fn reset_releases_memory() {
+        let mut parser = StreamingParser::new();
+        parser.feed(b"a,b,c\n1,2,3\n").unwrap();
+        let _ = parser.take_rows(10);
+
+        parser.reset();
+        assert_eq!(parser.buffer_size(), 0);
+        assert_eq!(parser.available_rows(), 0);
+        assert!(!parser.has_partial());
     }
 }
