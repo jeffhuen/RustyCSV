@@ -84,7 +84,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.3.8"}]
+  [{:rusty_csv, "~> 0.3.9"}]
 end
 ```
 
