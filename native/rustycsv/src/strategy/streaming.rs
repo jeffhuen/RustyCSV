@@ -28,10 +28,13 @@ pub(crate) fn shrink_excess<T>(v: &mut Vec<T>) {
 }
 
 /// Error returned when a streaming `feed()` would exceed the buffer limit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("streaming buffer overflow: feed would exceed maximum buffer size")]
+#[must_use]
 pub struct BufferOverflow;
 
 /// State for streaming CSV parser
+#[must_use]
 pub struct StreamingParser {
     /// Buffer holding unprocessed data
     buffer: Vec<u8>,
@@ -251,16 +254,19 @@ impl StreamingParser {
     }
 
     /// Check how many complete rows are available
+    #[must_use]
     pub fn available_rows(&self) -> usize {
         self.complete_rows.len()
     }
 
     /// Check if there's a partial row in the buffer
+    #[must_use]
     pub fn has_partial(&self) -> bool {
         self.partial_row_start < self.buffer.len()
     }
 
     /// Get the size of buffered data (for memory monitoring)
+    #[must_use]
     pub fn buffer_size(&self) -> usize {
         self.buffer.len()
     }

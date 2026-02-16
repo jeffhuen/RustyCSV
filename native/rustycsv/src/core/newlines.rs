@@ -5,6 +5,7 @@
 /// checks against the custom patterns.
 
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct Newlines {
     /// Newline patterns sorted longest-first for greedy matching.
     pub patterns: Vec<Vec<u8>>,
@@ -32,6 +33,7 @@ impl Newlines {
     }
 
     /// Maximum pattern length (used for chunk-boundary safety in streaming).
+    #[must_use]
     pub fn max_pattern_len(&self) -> usize {
         self.patterns.iter().map(|p| p.len()).max().unwrap_or(1)
     }

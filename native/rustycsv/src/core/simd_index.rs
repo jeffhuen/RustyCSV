@@ -5,6 +5,7 @@
 
 /// A newline terminator position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub struct RowEnd {
     /// Byte position of terminator start (\n or \r in \r\n).
     pub pos: u32,
@@ -14,6 +15,7 @@ pub struct RowEnd {
 
 /// Structural index: positions of all unquoted separators and row endings.
 #[derive(Debug)]
+#[must_use]
 pub struct StructuralIndex {
     /// Positions of unquoted field separators (commas, tabs, etc.).
     pub field_seps: Vec<u32>,
@@ -58,6 +60,7 @@ impl StructuralIndex {
 
     /// Number of rows.
     #[inline]
+    #[must_use]
     pub fn row_count(&self) -> usize {
         let n = self.row_ends.len();
         // If there's content after the last row_end (no trailing newline), there's one more row.
