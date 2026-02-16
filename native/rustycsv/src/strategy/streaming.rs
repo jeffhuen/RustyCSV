@@ -18,11 +18,12 @@ pub const DEFAULT_MAX_BUFFER: usize = 256 * 1024 * 1024;
 /// `Vec::drain` and `Vec::clear` preserve the original allocation. For
 /// long-lived streaming parsers this causes memory to grow monotonically
 /// to its peak usage and never return to the OS. This helper reclaims
-/// that excess when capacity exceeds 4× length (with a 1 KiB floor to
-/// avoid thrashing on small buffers).
+/// that excess when capacity exceeds 4× length (with a 1 KiB floor,
+/// measured in bytes, to avoid thrashing on small buffers).
 pub(crate) fn shrink_excess<T>(v: &mut Vec<T>) {
     let len = v.len();
-    if v.capacity() > len.saturating_mul(4).max(1024) {
+    let floor_elements = 1024 / std::mem::size_of::<T>().max(1);
+    if v.capacity() > len.saturating_mul(4).max(floor_elements) {
         v.shrink_to(len.saturating_mul(2));
     }
 }
@@ -423,5 +424,84 @@ mod tests {
 
         let rows = parser.take_rows(10);
         assert_eq!(rows[0], vec![b"a\rb".to_vec()]);
+    }
+
+    // --- Memory management tests ---
+
+    #[test]
+    fn shrink_excess_reclaims_when_capacity_exceeds_threshold() {
+        let mut v: Vec<u8> = Vec::with_capacity(8192);
+        v.push(1);
+        // capacity=8192, len=1 → 8192 > 1*4.max(1024) → should shrink
+        shrink_excess(&mut v);
+        assert!(
+            v.capacity() < 8192,
+            "capacity should have been reduced from 8192, got {}",
+            v.capacity()
+        );
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0], 1);
+    }
+
+    #[test]
+    fn shrink_excess_does_not_shrink_below_floor() {
+        let mut v: Vec<u8> = Vec::with_capacity(1024);
+        // capacity=1024, len=0 → 1024 <= 0*4.max(1024) → should NOT shrink
+        shrink_excess(&mut v);
+        assert_eq!(
+            v.capacity(),
+            1024,
+            "capacity at the floor should not be shrunk"
+        );
+    }
+
+    #[test]
+    fn shrink_excess_preserves_when_ratio_acceptable() {
+        let mut v: Vec<u8> = Vec::with_capacity(4000);
+        v.extend_from_slice(&[0u8; 2000]);
+        // capacity=4000, len=2000 → 4000 <= 2000*4.max(1024) → should NOT shrink
+        let cap_before = v.capacity();
+        shrink_excess(&mut v);
+        assert_eq!(v.capacity(), cap_before);
+    }
+
+    #[test]
+    fn shrink_excess_byte_floor_for_large_elements() {
+        // For Vec<Vec<Vec<u8>>>, size_of::<T>() = 24 bytes on 64-bit
+        // floor_elements = 1024 / 24 = 42
+        let mut v: Vec<Vec<Vec<u8>>> = Vec::with_capacity(200);
+        // capacity=200, len=0 → 200 > 0*4.max(42) → should shrink
+        shrink_excess(&mut v);
+        assert!(
+            v.capacity() < 200,
+            "should shrink large-element Vec past byte-based floor"
+        );
+    }
+
+    #[test]
+    fn finalize_releases_buffer() {
+        let mut parser = StreamingParser::new();
+        parser.feed(b"a,b,c\n1,2,3").unwrap();
+        assert!(parser.buffer_size() > 0);
+
+        let rows = parser.finalize();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            parser.buffer_size(),
+            0,
+            "buffer should be released after finalize"
+        );
+    }
+
+    #[test]
+    fn reset_releases_memory() {
+        let mut parser = StreamingParser::new();
+        parser.feed(b"a,b,c\n1,2,3\n").unwrap();
+        let _ = parser.take_rows(10);
+
+        parser.reset();
+        assert_eq!(parser.buffer_size(), 0);
+        assert_eq!(parser.available_rows(), 0);
+        assert!(!parser.has_partial());
     }
 }
