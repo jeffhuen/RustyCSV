@@ -1575,23 +1575,21 @@ fn encode_string_parallel<'a>(
                             continue;
                         }
 
-                        let utf8_field: Vec<u8> = if needs_quoting {
+                        if needs_quoting {
                             let mut buf = Vec::with_capacity(field.len() + 8);
                             write_quoted_field(&mut buf, field, esc);
-                            buf
+                            if needs_encoding {
+                                let encoded = encode_utf8_to_target(&buf, encoding);
+                                out.extend_from_slice(&encoded);
+                            } else {
+                                out.extend_from_slice(&buf);
+                            }
                         } else if needs_encoding {
-                            field.clone()
-                        } else {
-                            // No formula, no quoting, no encoding — direct extend
-                            out.extend_from_slice(field);
-                            continue;
-                        };
-
-                        if needs_encoding {
-                            let encoded = encode_utf8_to_target(&utf8_field, encoding);
+                            // Encode directly — no clone needed
+                            let encoded = encode_utf8_to_target(field, encoding);
                             out.extend_from_slice(&encoded);
                         } else {
-                            out.extend_from_slice(&utf8_field);
+                            out.extend_from_slice(field);
                         }
                     }
                     out.extend_from_slice(&ls_encoded);

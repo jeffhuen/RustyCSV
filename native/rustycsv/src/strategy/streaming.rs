@@ -13,6 +13,20 @@ use crate::core::{extract_field_owned_with_escape, is_separator};
 /// Default maximum buffer size for streaming parsers (256 MB).
 pub const DEFAULT_MAX_BUFFER: usize = 256 * 1024 * 1024;
 
+/// Shrink a Vec's capacity when it greatly exceeds its length.
+///
+/// `Vec::drain` and `Vec::clear` preserve the original allocation. For
+/// long-lived streaming parsers this causes memory to grow monotonically
+/// to its peak usage and never return to the OS. This helper reclaims
+/// that excess when capacity exceeds 4× length (with a 1 KiB floor to
+/// avoid thrashing on small buffers).
+pub(crate) fn shrink_excess<T>(v: &mut Vec<T>) {
+    let len = v.len();
+    if v.capacity() > len.saturating_mul(4).max(1024) {
+        v.shrink_to(len.saturating_mul(2));
+    }
+}
+
 /// Error returned when a streaming `feed()` would exceed the buffer limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BufferOverflow;
@@ -220,13 +234,20 @@ impl StreamingParser {
             // Adjust positions after compaction
             self.scan_pos -= self.partial_row_start;
             self.partial_row_start = 0;
+            // Release excess capacity to prevent unbounded memory growth.
+            // Vec::drain preserves the original allocation even after removing
+            // most data, causing the buffer to hold its peak capacity forever.
+            shrink_excess(&mut self.buffer);
         }
     }
 
     /// Take up to `max` complete rows from the parser
     pub fn take_rows(&mut self, max: usize) -> Vec<Vec<Vec<u8>>> {
         let take_count = max.min(self.complete_rows.len());
-        self.complete_rows.drain(0..take_count).collect()
+        let rows: Vec<_> = self.complete_rows.drain(0..take_count).collect();
+        // Prevent complete_rows from retaining peak capacity after draining
+        shrink_excess(&mut self.complete_rows);
+        rows
     }
 
     /// Check how many complete rows are available
@@ -252,8 +273,12 @@ impl StreamingParser {
             if !row.is_empty() {
                 self.complete_rows.push(row);
             }
-            self.partial_row_start = self.buffer.len();
         }
+
+        // Release the buffer — parsing is done, no need to hold this memory
+        self.buffer = Vec::new();
+        self.partial_row_start = 0;
+        self.scan_pos = 0;
 
         // Take all remaining rows
         std::mem::take(&mut self.complete_rows)
@@ -262,8 +287,9 @@ impl StreamingParser {
     /// Reset the parser state
     #[allow(dead_code)]
     pub fn reset(&mut self) {
-        self.buffer.clear();
-        self.complete_rows.clear();
+        // Use = Vec::new() instead of .clear() to actually release memory
+        self.buffer = Vec::new();
+        self.complete_rows = Vec::new();
         self.partial_row_start = 0;
         self.scan_pos = 0;
         self.in_quotes = false;

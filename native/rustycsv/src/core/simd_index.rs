@@ -144,6 +144,8 @@ impl<'a> Iterator for RowIter<'a> {
     }
 }
 
+impl ExactSizeIterator for RowIter<'_> {}
+
 /// A single row from the cursor-based iterator, with its field bounds.
 pub struct Row<'a> {
     pub start: u32,
@@ -210,6 +212,8 @@ impl<'a> Iterator for RowFieldIter<'a> {
     }
 }
 
+impl ExactSizeIterator for RowFieldIter<'_> {}
+
 /// Iterator over fields in a single row.
 pub struct FieldIter<'a> {
     seps: &'a [u32],
@@ -253,6 +257,8 @@ impl<'a> Iterator for FieldIter<'a> {
         (remaining, Some(remaining))
     }
 }
+
+impl ExactSizeIterator for FieldIter<'_> {}
 
 #[cfg(test)]
 mod tests {

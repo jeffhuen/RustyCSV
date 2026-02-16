@@ -10,6 +10,7 @@
 use std::borrow::Cow;
 
 use crate::core::newlines::{match_newline, Newlines};
+use super::streaming::shrink_excess;
 
 // ============================================================================
 // Helpers
@@ -658,12 +659,15 @@ impl GeneralStreamingParser {
             self.buffer.drain(0..self.partial_row_start);
             self.scan_pos -= self.partial_row_start;
             self.partial_row_start = 0;
+            shrink_excess(&mut self.buffer);
         }
     }
 
     pub fn take_rows(&mut self, max: usize) -> Vec<Vec<Vec<u8>>> {
         let take_count = max.min(self.complete_rows.len());
-        self.complete_rows.drain(0..take_count).collect()
+        let rows: Vec<_> = self.complete_rows.drain(0..take_count).collect();
+        shrink_excess(&mut self.complete_rows);
+        rows
     }
 
     pub fn available_rows(&self) -> usize {
@@ -684,8 +688,11 @@ impl GeneralStreamingParser {
             if !row.is_empty() {
                 self.complete_rows.push(row);
             }
-            self.partial_row_start = self.buffer.len();
         }
+        // Release the buffer — parsing is done
+        self.buffer = Vec::new();
+        self.partial_row_start = 0;
+        self.scan_pos = 0;
         std::mem::take(&mut self.complete_rows)
     }
 }
@@ -1317,12 +1324,15 @@ impl GeneralStreamingParserNewlines {
             self.buffer.drain(0..self.partial_row_start);
             self.scan_pos -= self.partial_row_start;
             self.partial_row_start = 0;
+            shrink_excess(&mut self.buffer);
         }
     }
 
     pub fn take_rows(&mut self, max: usize) -> Vec<Vec<Vec<u8>>> {
         let take_count = max.min(self.complete_rows.len());
-        self.complete_rows.drain(0..take_count).collect()
+        let rows: Vec<_> = self.complete_rows.drain(0..take_count).collect();
+        shrink_excess(&mut self.complete_rows);
+        rows
     }
 
     pub fn available_rows(&self) -> usize {
@@ -1343,8 +1353,11 @@ impl GeneralStreamingParserNewlines {
             if !row.is_empty() {
                 self.complete_rows.push(row);
             }
-            self.partial_row_start = self.buffer.len();
         }
+        // Release the buffer — parsing is done
+        self.buffer = Vec::new();
+        self.partial_row_start = 0;
+        self.scan_pos = 0;
         std::mem::take(&mut self.complete_rows)
     }
 }
