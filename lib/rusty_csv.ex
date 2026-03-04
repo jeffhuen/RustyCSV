@@ -32,13 +32,17 @@ defmodule RustyCSV do
 
   ## Parsing Strategies
 
-  RustyCSV supports multiple parsing strategies via the `:strategy` option:
+  RustyCSV supports the `:strategy` option for backward compatibility, but
+  `:simd`, `:basic`, `:indexed`, and `:zero_copy` are all equivalent — they
+  use the same SIMD structural boundary scanner and hybrid sub-binary term
+  builder. The only meaningfully distinct strategies are:
 
-    * `:simd` - SIMD-accelerated scanning via memchr (default, fastest for most files)
-    * `:basic` - Simple byte-by-byte parsing (good for debugging)
-    * `:indexed` - Two-phase index-then-extract (good for re-extracting rows)
-    * `:parallel` - Multi-threaded via rayon (best for very large files 500MB+ with complex quoting)
-    * `:zero_copy` - Sub-binary references (NimbleCSV-like memory profile, max speed)
+    * `:simd` (default) — SIMD structural boundary scan, single-threaded
+    * `:parallel` — same SIMD scan, multi-threaded field extraction via rayon
+      (best for very large files 500 MB+)
+
+  The streaming parser (used automatically with `parse_stream/2`) is a
+  separate stateful approach for bounded-memory processing.
 
   Example:
 
@@ -297,37 +301,40 @@ defmodule RustyCSV do
 
   ## Available Strategies
 
-    * `:simd` - SIMD-accelerated scanning via memchr (default, fastest for most files)
-    * `:basic` - Simple byte-by-byte parsing (useful for debugging)
-    * `:indexed` - Two-phase index-then-extract (good for re-extracting rows)
-    * `:parallel` - Multi-threaded via rayon (best for very large files 500MB+ with complex quoting)
-    * `:zero_copy` - Sub-binary references (maximum speed, keeps parent binary alive)
+    * `:simd` (default) — SIMD structural boundary scan, single-threaded.
+    * `:basic` — alias for `:simd` (retained for backward compatibility).
+    * `:indexed` — alias for `:simd` (retained for backward compatibility).
+    * `:parallel` — same SIMD scan, multi-threaded field extraction via rayon.
+      Best for very large files (500 MB+).
+    * `:zero_copy` — alias for `:simd` (retained for backward compatibility).
 
-  ## Memory Model Comparison
+  > #### Strategy equivalence {: .info}
+  >
+  > `:simd`, `:basic`, `:indexed`, and `:zero_copy` all execute the same
+  > code path: a portable-SIMD structural scanner followed by a hybrid
+  > sub-binary term builder. They produce identical results with identical
+  > performance. The names are kept for API stability.
 
-  All strategies use boundary-based parsing: the NIF scans the input to find
-  field boundaries, then returns sub-binary references for clean fields (zero
-  copy) and only allocates new binaries for fields that require unescaping.
-  The input binary is kept alive while any sub-binary references it.
+  ## Memory Model
+
+  All batch strategies use boundary-based parsing: the NIF scans the input
+  to find field boundaries, then returns sub-binary references for clean
+  fields (zero-copy) and only allocates new binaries for fields that
+  require unescaping. The input binary is kept alive while any sub-binary
+  references it.
 
   | Strategy | Best When |
   |----------|-----------|
   | `:simd` | Default, fastest for most files |
-  | `:basic` | Debugging, baseline |
-  | `:indexed` | Row range extraction |
-  | `:parallel` | Large files 500MB+, complex quoting |
-  | `:zero_copy` | Speed-critical, short-lived results |
+  | `:parallel` | Large files 500 MB+, complex quoting |
 
   ## Examples
 
-      # Default SIMD strategy
+      # Default strategy
       CSV.parse_string(data)
 
       # Parallel for large files
       CSV.parse_string(large_data, strategy: :parallel)
-
-      # Zero-copy for maximum speed
-      CSV.parse_string(data, strategy: :zero_copy)
 
   """
   @type strategy :: :simd | :basic | :indexed | :parallel | :zero_copy
@@ -339,11 +346,11 @@ defmodule RustyCSV do
 
     * `:skip_headers` - When `true`, skips the first row. Defaults to `true`.
     * `:strategy` - The parsing strategy to use. One of:
-      * `:simd` - SIMD-accelerated (default)
-      * `:basic` - Simple byte-by-byte
-      * `:indexed` - Two-phase index-then-extract
+      * `:simd` - SIMD structural boundary scan (default)
+      * `:basic` - Alias for `:simd`
+      * `:indexed` - Alias for `:simd`
       * `:parallel` - Multi-threaded via rayon
-      * `:zero_copy` - Sub-binary references (keeps parent binary alive)
+      * `:zero_copy` - Alias for `:simd`
     * `:headers` - Controls header handling. Defaults to `false`.
       * `false` - Return rows as lists (default behavior)
       * `true` - Use first row as string keys, return list of maps.
@@ -351,6 +358,14 @@ defmodule RustyCSV do
       * list of atoms or strings - Use as explicit keys, return list of maps.
         The first row is skipped by default (`:skip_headers` applies). Pass
         `skip_headers: false` if the file has no header row.
+
+  ## Limits
+
+    * **Input size** - Batch parsing (all strategies except streaming) is limited
+      to inputs of at most 4 GiB (`u32::MAX` bytes) because the SIMD structural
+      scanner uses 32-bit positions. Passing a larger binary returns
+      `{:error, :input_too_large}`. Use the streaming parser for files exceeding
+      this limit.
 
   ## Streaming Options
 
@@ -592,11 +607,11 @@ defmodule RustyCSV do
   ### Strategy Options
 
     * `:strategy` - The default parsing strategy. One of:
-      * `:simd` - SIMD-accelerated via memchr (default, fastest)
-      * `:basic` - Simple byte-by-byte parsing
-      * `:indexed` - Two-phase index-then-extract
+      * `:simd` - SIMD structural boundary scan (default)
+      * `:basic` - Alias for `:simd`
+      * `:indexed` - Alias for `:simd`
       * `:parallel` - Multi-threaded via rayon
-      * `:zero_copy` - Sub-binary references (NimbleCSV-like memory, max speed)
+      * `:zero_copy` - Alias for `:simd`
 
   ### Documentation
 

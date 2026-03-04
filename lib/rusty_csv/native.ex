@@ -24,25 +24,24 @@ defmodule RustyCSV.Native do
 
   ## Strategies
 
-  The module exposes six parsing strategies:
+  The module exposes three distinct parsing strategies:
 
-    * `parse_string/1` - Basic byte-by-byte parsing (Strategy A)
-    * `parse_string_fast/1` - SIMD-accelerated via memchr (Strategy B)
-    * `parse_string_indexed/1` - Two-phase index-then-extract (Strategy C)
-    * `parse_string_parallel/1` - Multi-threaded via rayon (Strategy E)
-    * `parse_string_zero_copy/1` - Sub-binary references (Strategy F)
-    * `streaming_*` functions - Stateful streaming parser (Strategy D)
+    * **Batch** — `parse_string/1`, `parse_string_fast/1`, `parse_string_indexed/1`,
+      and `parse_string_zero_copy/1` are all equivalent. They use the same SIMD
+      structural boundary scan and hybrid sub-binary term builder. Multiple names
+      are retained for backward compatibility.
+    * **Parallel** — `parse_string_parallel/1` uses the same SIMD scan but extracts
+      fields in parallel via a rayon thread pool. Best for very large files (500 MB+).
+    * **Streaming** — `streaming_*` functions process data in bounded-memory chunks.
+      Use for files that exceed available memory or 4 GiB.
 
   ## Strategy Selection
 
   | Strategy | Use Case | Memory Model |
   |----------|----------|--------------|
-  | `parse_string_fast/1` | Default, most files | Copy (frees input) |
-  | `parse_string_parallel/1` | Large files 500MB+ | Copy (frees input) |
-  | `parse_string_zero_copy/1` | Maximum speed | Sub-binary (keeps input) |
-  | `parse_string_indexed/1` | Row range extraction | Copy (frees input) |
-  | `streaming_*` | Unbounded files | Copy (per chunk) |
-  | `parse_string/1` | Debugging | Copy (frees input) |
+  | `parse_string/1` et al. | Default, most files | Sub-binary (hybrid) |
+  | `parse_string_parallel/1` | Large files 500MB+ | Owned copy |
+  | `streaming_*` | Unbounded files, >4 GiB | Owned copy (per chunk) |
 
   ## Scheduling
 
@@ -150,14 +149,22 @@ defmodule RustyCSV.Native do
   @type escape :: binary() | non_neg_integer()
 
   # ==========================================================================
-  # Strategy A: Basic Parsing
+  # Batch Parsing (A/B/C/F are equivalent — same SIMD boundary scan)
   # ==========================================================================
 
   @doc """
-  Parse CSV using basic byte-by-byte scanning. Runs on a dirty CPU scheduler.
+  Parse CSV using the SIMD structural boundary scanner. Runs on a dirty CPU scheduler.
 
-  This is the simplest implementation, processing one byte at a time.
-  Use `parse_string_fast/1` for better performance in most cases.
+  Uses a portable-SIMD scanner to find all field and row boundaries in a
+  single pass, then builds Elixir terms using sub-binary references where
+  possible (hybrid Cow approach — zero-copy for clean fields, copy only
+  when unescaping is needed).
+
+  Functionally equivalent to `parse_string_fast/1`, `parse_string_indexed/1`,
+  and `parse_string_zero_copy/1` — all use the same code path. Multiple
+  function names are retained for backward API compatibility.
+
+  Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 
   ## Examples
 
@@ -204,15 +211,13 @@ defmodule RustyCSV.Native do
   def parse_string_with_config(_csv, _separator, _escape, _newlines),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  # ==========================================================================
-  # Strategy B: SIMD-Accelerated Parsing
-  # ==========================================================================
-
   @doc """
-  Parse CSV using SIMD-accelerated delimiter scanning. Runs on a dirty CPU scheduler.
+  Parse CSV using the SIMD structural boundary scanner. Runs on a dirty CPU scheduler.
 
-  Uses the `memchr` crate for fast delimiter detection on supported
-  architectures. This is the recommended strategy for most use cases.
+  Equivalent to `parse_string/1` — same code path, retained for backward
+  API compatibility.
+
+  Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 
   ## Examples
 
@@ -224,7 +229,8 @@ defmodule RustyCSV.Native do
   def parse_string_fast(_csv), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Parse CSV using SIMD with configurable separator(s) and escape.
+  Parse CSV with configurable separator(s) and escape. Equivalent to
+  `parse_string_with_config/4`.
 
   ## Examples
 
@@ -241,16 +247,13 @@ defmodule RustyCSV.Native do
   def parse_string_fast_with_config(_csv, _separator, _escape, _newlines),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  # ==========================================================================
-  # Strategy C: Two-Phase Index-then-Extract
-  # ==========================================================================
-
   @doc """
-  Parse CSV using two-phase index-then-extract approach. Runs on a dirty CPU scheduler.
+  Parse CSV using the SIMD structural boundary scanner. Runs on a dirty CPU scheduler.
 
-  First builds an index of row/field boundaries, then extracts fields.
-  This approach has better cache utilization and enables advanced use
-  cases like extracting specific row ranges.
+  Equivalent to `parse_string/1` — same code path, retained for backward
+  API compatibility.
+
+  Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 
   ## Examples
 
@@ -262,7 +265,8 @@ defmodule RustyCSV.Native do
   def parse_string_indexed(_csv), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Parse CSV using two-phase approach with configurable separator(s) and escape.
+  Parse CSV with configurable separator(s) and escape. Equivalent to
+  `parse_string_with_config/4`.
 
   ## Examples
 
@@ -444,19 +448,13 @@ defmodule RustyCSV.Native do
   def parse_string_parallel_with_config(_csv, _separator, _escape, _newlines),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  # ==========================================================================
-  # Strategy F: Zero-Copy Parsing (Sub-binary references)
-  # ==========================================================================
-
   @doc """
-  Parse CSV using zero-copy sub-binary references where possible. Runs on a dirty CPU scheduler.
+  Parse CSV using the SIMD structural boundary scanner. Runs on a dirty CPU scheduler.
 
-  Uses BEAM sub-binary references for unquoted and simply-quoted fields,
-  only copying when quote unescaping is needed (hybrid Cow approach).
+  Equivalent to `parse_string/1` — same code path, retained for backward
+  API compatibility.
 
-  **Trade-off**: Sub-binaries keep the parent binary alive until all
-  references are garbage collected. Use this when you want maximum speed
-  and control memory lifetime yourself.
+  Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 
   ## Examples
 
@@ -468,15 +466,16 @@ defmodule RustyCSV.Native do
   def parse_string_zero_copy(_csv), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Parse CSV using zero-copy with configurable separator(s) and escape.
+  Parse CSV with configurable separator(s) and escape. Equivalent to
+  `parse_string_with_config/4`.
 
   ## Examples
 
-      # TSV zero-copy parsing with integer separator
+      # TSV parsing with integer separator
       iex> RustyCSV.Native.parse_string_zero_copy_with_config("a\\tb\\n1\\t2\\n", 9, 34)
       [["a", "b"], ["1", "2"]]
 
-      # TSV zero-copy parsing with binary separator
+      # TSV parsing with binary separator
       iex> RustyCSV.Native.parse_string_zero_copy_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34)
       [["a", "b"], ["1", "2"]]
 

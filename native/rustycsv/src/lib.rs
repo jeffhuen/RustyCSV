@@ -5,12 +5,13 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 //
 // Strategies:
-// A: Basic byte-by-byte parsing (parse_string)
-// B: SIMD structural scanner (parse_string_fast)
-// C: Two-phase index-then-extract (parse_string_indexed)
-// D: Streaming chunked parser (streaming_*)
-// E: Parallel parsing via rayon (parse_string_parallel)
-// F: Zero-copy sub-binary parsing (parse_string_zero_copy)
+// A/B/C/F: SIMD boundary scan + hybrid sub-binary term builder (parse_string,
+//          parse_string_fast, parse_string_indexed, parse_string_zero_copy).
+//          These are functionally equivalent — all use the same code path.
+//          Kept as separate NIFs for backward-compatible Elixir API.
+// D:       Streaming chunked parser (streaming_*) — bounded memory, processes chunks.
+// E:       Parallel parsing via rayon (parse_string_parallel) — multi-threaded
+//          extraction after a single-threaded SIMD scan.
 
 use rustler::types::ListIterator;
 use rustler::{Atom, Binary, Encoder, Env, Error, NewBinary, NifResult, ResourceArc, Term};
@@ -21,6 +22,7 @@ mod atoms {
         error,
         mutex_poisoned,
         buffer_overflow,
+        input_too_large,
     }
 }
 
@@ -28,6 +30,28 @@ pub mod core;
 mod resource;
 pub mod strategy;
 mod term;
+
+/// Maximum input size for batch parsing (u32::MAX = 4 GiB).
+/// The SIMD structural scanner uses u32 positions; inputs larger than
+/// this would silently produce incorrect results due to truncation.
+const MAX_BATCH_INPUT_SIZE: usize = u32::MAX as usize;
+
+/// Returns `true` when `len` exceeds the batch parsing size limit.
+#[inline]
+fn exceeds_batch_limit(len: usize) -> bool {
+    len > MAX_BATCH_INPUT_SIZE
+}
+
+/// Check whether `input` exceeds the batch parsing size limit.
+/// Returns an `{:error, :input_too_large}` term on failure.
+/// Streaming parsing is not affected — it processes data in small chunks.
+fn guard_input_size<'a>(env: Env<'a>, input: &[u8]) -> Result<(), Term<'a>> {
+    if exceeds_batch_limit(input.len()) {
+        Err((atoms::error(), atoms::input_too_large()).encode(env))
+    } else {
+        Ok(())
+    }
+}
 
 /// Separators: list of patterns. Each pattern can be multi-byte.
 struct Separators {
@@ -256,17 +280,28 @@ fn reset_rust_memory_stats() -> (usize, usize) {
 }
 
 // ============================================================================
-// Strategy A: Basic Parser
+// Strategy A: Batch Parser (legacy name — uses same SIMD path as B/C/F)
 // ============================================================================
 
-/// Parse CSV string into list of rows (basic byte-by-byte)
+/// Parse CSV string into list of rows.
+///
+/// Equivalent to `parse_string_fast`, `parse_string_indexed`, and
+/// `parse_string_zero_copy` — all use the same SIMD boundary scan
+/// and hybrid sub-binary term builder internally.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let boundaries = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
     Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
 }
 
-/// Parse CSV with configurable separator(s), escape, and newlines
+/// Parse CSV with configurable separator(s), escape, and newlines.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_with_config<'a>(
     env: Env<'a>,
@@ -275,6 +310,9 @@ fn parse_string_with_config<'a>(
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
@@ -283,17 +321,26 @@ fn parse_string_with_config<'a>(
 }
 
 // ============================================================================
-// Strategy B: SIMD-Accelerated Parser
+// Strategy B: Batch Parser (legacy name — same SIMD path as A/C/F)
 // ============================================================================
 
-/// Parse using SIMD structural scanner for delimiter detection
+/// Parse CSV using SIMD structural scanner.
+///
+/// Equivalent to `parse_string` — both use the same code path.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_fast<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let boundaries = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
     Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
 }
 
-/// Parse using SIMD with configurable separator(s), escape, and newlines
+/// Parse using SIMD with configurable separator(s), escape, and newlines.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_fast_with_config<'a>(
     env: Env<'a>,
@@ -302,6 +349,9 @@ fn parse_string_fast_with_config<'a>(
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
@@ -310,17 +360,26 @@ fn parse_string_fast_with_config<'a>(
 }
 
 // ============================================================================
-// Strategy C: Two-Phase Index-then-Extract Parser
+// Strategy C: Batch Parser (legacy name — same SIMD path as A/B/F)
 // ============================================================================
 
-/// Parse using two-phase approach: build index, then extract
+/// Parse CSV using the SIMD boundary scan.
+///
+/// Equivalent to `parse_string` — both use the same code path.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_indexed<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let boundaries = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
     Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
 }
 
-/// Parse using two-phase with configurable separator(s), escape, and newlines
+/// Parse using two-phase with configurable separator(s), escape, and newlines.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_indexed_with_config<'a>(
     env: Env<'a>,
@@ -329,6 +388,9 @@ fn parse_string_indexed_with_config<'a>(
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
@@ -465,15 +527,21 @@ fn dispatch_parallel_boundary_parse(
     }
 }
 
-/// Parse CSV in parallel using rayon thread pool (boundary-based sub-binaries)
-/// Uses DirtyCpu scheduler since this can take significant time
+/// Parse CSV in parallel using rayon thread pool (boundary-based sub-binaries).
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_parallel<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let boundaries = parse_csv_parallel_boundaries(input.as_slice());
     Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
 }
 
-/// Parse CSV in parallel with configurable separator(s), escape, and newlines
+/// Parse CSV in parallel with configurable separator(s), escape, and newlines.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_parallel_with_config<'a>(
     env: Env<'a>,
@@ -482,6 +550,9 @@ fn parse_string_parallel_with_config<'a>(
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
@@ -491,18 +562,27 @@ fn parse_string_parallel_with_config<'a>(
 }
 
 // ============================================================================
-// Strategy F: Zero-Copy Parser (Sub-binary references)
+// Strategy F: Batch Parser (legacy name — same SIMD path as A/B/C)
 // ============================================================================
 
-/// Parse CSV using zero-copy sub-binaries where possible
+/// Parse CSV using the SIMD boundary scan.
+///
+/// Equivalent to `parse_string` — both use the same code path.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_zero_copy<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let bytes = input.as_slice();
     let boundaries = parse_csv_boundaries_with_config(bytes, b',', b'"');
     Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
 }
 
-/// Parse CSV using zero-copy with configurable separator(s), escape, and newlines
+/// Parse CSV using zero-copy with configurable separator(s), escape, and newlines.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_string_zero_copy_with_config<'a>(
     env: Env<'a>,
@@ -511,6 +591,9 @@ fn parse_string_zero_copy_with_config<'a>(
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
@@ -697,6 +780,8 @@ fn boundary_row_to_key_terms<'a>(
 }
 
 /// Parse CSV and return list of maps. Dispatches to strategy internally.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[allow(clippy::too_many_arguments)]
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_to_maps<'a>(
@@ -709,6 +794,9 @@ fn parse_to_maps<'a>(
     header_mode_term: Term<'a>,
     skip_first: bool,
 ) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
@@ -751,7 +839,9 @@ fn parse_to_maps<'a>(
     }
 }
 
-/// Parallel variant for parse_to_maps on dirty CPU scheduler
+/// Parallel variant for parse_to_maps on dirty CPU scheduler.
+///
+/// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_to_maps_parallel<'a>(
     env: Env<'a>,
@@ -762,6 +852,9 @@ fn parse_to_maps_parallel<'a>(
     header_mode_term: Term<'a>,
     skip_first: bool,
 ) -> NifResult<Term<'a>> {
+    if let Err(t) = guard_input_size(env, input.as_slice()) {
+        return Ok(t);
+    }
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
@@ -1624,3 +1717,28 @@ fn load(env: Env, _info: Term) -> bool {
 }
 
 rustler::init!("Elixir.RustyCSV.Native", load = load);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exceeds_batch_limit_at_boundary() {
+        // Exactly at limit — must pass
+        assert!(!exceeds_batch_limit(u32::MAX as usize));
+        // One byte over — must reject
+        assert!(exceeds_batch_limit(u32::MAX as usize + 1));
+    }
+
+    #[test]
+    fn exceeds_batch_limit_zero_and_small() {
+        assert!(!exceeds_batch_limit(0));
+        assert!(!exceeds_batch_limit(1));
+        assert!(!exceeds_batch_limit(1024 * 1024));
+    }
+
+    #[test]
+    fn max_batch_input_size_equals_u32_max() {
+        assert_eq!(MAX_BATCH_INPUT_SIZE, u32::MAX as usize);
+    }
+}

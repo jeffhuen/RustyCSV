@@ -83,6 +83,13 @@ fn extract_positions(mut mask: u64, base_pos: u32, out: &mut Vec<u32>) {
 ///
 /// `separators` are the field delimiter bytes (e.g., &[b',']).
 /// `escape` is the quote/escape byte (e.g., b'"').
+///
+/// # Panics
+///
+/// Positions are stored as `u32`. Inputs larger than `u32::MAX` (4 GiB)
+/// will silently produce incorrect results due to truncation.
+/// **Callers must validate input length before calling this function.**
+/// The NIF layer enforces this via `guard_input_size`.
 pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> StructuralIndex {
     let est_seps = input.len() / 10 + 16;
     let est_rows = input.len() / 50 + 4;
@@ -766,5 +773,29 @@ mod tests {
             "comma at 6 is inside quotes, only 12 is real"
         );
         assert_eq!(ends, vec![RowEnd { pos: 17, len: 1 }]);
+    }
+
+    // =======================================================================
+    // Input size limit: u32 positions cap input at 4 GiB
+    // =======================================================================
+
+    #[test]
+    fn test_input_len_stored_as_u32() {
+        // Verify that StructuralIndex.input_len is u32, so inputs at the
+        // u32::MAX boundary produce correct values while larger inputs
+        // would wrap. The NIF layer guards against this with guard_input_size.
+        let idx = scan(b"a,b\n");
+        assert_eq!(idx.input_len, 4_u32);
+
+        // Verify the as-u32 cast at the max boundary is safe
+        let max: usize = u32::MAX as usize;
+        assert_eq!(max as u32, u32::MAX);
+
+        // max + 1 would wrap to 0 — this is the truncation the guard prevents
+        let overflow: usize = max + 1;
+        assert_eq!(
+            overflow as u32, 0,
+            "u32 wraparound confirms why guard is needed"
+        );
     }
 }

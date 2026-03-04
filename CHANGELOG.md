@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2026-03-03
+
+### Fixed
+
+- **4 GiB input size guard** — batch parsing NIFs now return `{:error, :input_too_large}` for inputs exceeding `u32::MAX` bytes, preventing silent truncation in the SIMD structural scanner
+- **Strategy documentation mismatch** — corrected docs across `rusty_csv.ex`, `native.ex`, and `lib.rs` to reflect that `:basic`, `:simd`, `:indexed`, and `:zero_copy` are equivalent aliases for the same SIMD code path
+- **Compile warnings in test suite** — moved runtime `RustyCSV.define` calls to module level in `multi_separator_test.exs`
+
+### Changed
+
+- **Pinned rustler dependency** — changed from `branch = "master"` to a specific commit rev for reproducible builds
+
 ## [0.3.9] - 2026-02-16
 
 Improved memory efficiency and correctness for long-running streaming workloads.

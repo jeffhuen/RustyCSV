@@ -25,6 +25,8 @@ defmodule MultiSeparatorTest do
   # Define edge case parsers
   RustyCSV.define(TestSingleSep, separator: ",", escape: "\"")
   RustyCSV.define(TestSingleList, separator: [","], escape: "\"")
+  RustyCSV.define(TestMultiByteSep, separator: [",", "::"], escape: "\"")
+  RustyCSV.define(TestIntSep, separator: 44, escape: "\"")
 
   describe "multi-separator parsing" do
     test "parses comma-separated values" do
@@ -171,13 +173,11 @@ defmodule MultiSeparatorTest do
     end
 
     test "multi-byte separator in list is now allowed" do
-      RustyCSV.define(TestMultiByteSep, separator: [",", "::"], escape: "\"")
       result = TestMultiByteSep.parse_string("a,b::c\n", skip_headers: false)
       assert result == [["a", "b", "c"]]
     end
 
     test "accepts integer codepoint as separator" do
-      RustyCSV.define(TestIntSep, separator: 44, escape: "\"")
       result = TestIntSep.parse_string("a,b\n", skip_headers: false)
       assert result == [["a", "b"]]
     end

@@ -152,7 +152,7 @@ checksum = "8d942b98df5e658f56f20d592c7f868833fe38115e65c33003d8cd224b0155da"
 [[package]]
 name = "rustler"
 version = "0.37.2"
-source = "git+https://github.com/rusterlium/rustler.git?branch=master#b539c3bb5b8730ac07475f972788464c14e7ab5d"
+source = "git+https://github.com/rusterlium/rustler.git?rev=b539c3bb5b8730ac07475f972788464c14e7ab5d#b539c3bb5b8730ac07475f972788464c14e7ab5d"
 dependencies = [
  "inventory",
  "libloading",
@@ -163,7 +163,7 @@ dependencies = [
 [[package]]
 name = "rustler_codegen"
 version = "0.37.2"
-source = "git+https://github.com/rusterlium/rustler.git?branch=master#b539c3bb5b8730ac07475f972788464c14e7ab5d"
+source = "git+https://github.com/rusterlium/rustler.git?rev=b539c3bb5b8730ac07475f972788464c14e7ab5d#b539c3bb5b8730ac07475f972788464c14e7ab5d"
 dependencies = [
  "heck",
  "inventory",
@@ -180,7 +180,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rustycsv"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "mimalloc",
  "rayon",

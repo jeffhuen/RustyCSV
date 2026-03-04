@@ -347,21 +347,11 @@ mod tests {
 
     #[test]
     fn test_simd_field_needs_quoting_multi_sep() {
-        assert!(field_needs_quoting_simd_multi_sep(
-            b"a,b",
-            &[b',', b';'],
-            b'"',
-            &[]
-        ));
-        assert!(field_needs_quoting_simd_multi_sep(
-            b"a;b",
-            &[b',', b';'],
-            b'"',
-            &[]
-        ));
+        assert!(field_needs_quoting_simd_multi_sep(b"a,b", b",;", b'"', &[]));
+        assert!(field_needs_quoting_simd_multi_sep(b"a;b", b",;", b'"', &[]));
         assert!(!field_needs_quoting_simd_multi_sep(
             b"abc",
-            &[b',', b';'],
+            b",;",
             b'"',
             &[]
         ));
@@ -399,30 +389,27 @@ mod tests {
         // Without reserved, $ doesn't trigger quoting
         assert!(!field_needs_quoting_simd(b"price$100", b',', b'"', &[]));
         // With reserved, $ triggers quoting
-        assert!(field_needs_quoting_simd(b"price$100", b',', b'"', &[b'$']));
+        assert!(field_needs_quoting_simd(b"price$100", b',', b'"', b"$"));
 
         // SIMD path (>= 16 bytes)
         let field = b"abcdefghijklmno$qrstuvwxyz";
         assert!(!field_needs_quoting_simd(field, b',', b'"', &[]));
-        assert!(field_needs_quoting_simd(field, b',', b'"', &[b'$']));
+        assert!(field_needs_quoting_simd(field, b',', b'"', b"$"));
 
         // Multiple reserved chars
-        assert!(field_needs_quoting_simd(b"a=b", b',', b'"', &[b'$', b'=']));
+        assert!(field_needs_quoting_simd(b"a=b", b',', b'"', b"$="));
     }
 
     #[test]
     fn test_reserved_chars_multi_sep() {
         assert!(!field_needs_quoting_simd_multi_sep(
             b"a$b",
-            &[b',', b';'],
+            b",;",
             b'"',
             &[]
         ));
         assert!(field_needs_quoting_simd_multi_sep(
-            b"a$b",
-            &[b',', b';'],
-            b'"',
-            &[b'$']
+            b"a$b", b",;", b'"', b"$"
         ));
     }
 
@@ -438,7 +425,7 @@ mod tests {
             b"price@100",
             b"::",
             b"$$",
-            &[b'@']
+            b"@"
         ));
     }
 }
