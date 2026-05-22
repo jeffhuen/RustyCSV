@@ -37,7 +37,7 @@
 | **Multi-separator support** | ✅ `[",", ";"]`, `"::"` | ✅ |
 | **Encoding support** | ✅ UTF-8, UTF-16, Latin-1, UTF-32 | ✅ |
 | **Memory model** | Sub-binary references | Sub-binary references |
-| **NIF encoding** | ✅ Returns flat binary (same bytes, ready to use — no flattening needed) | Returns iodata list (typically flattened by caller) |
+| **NIF encoding** | ✅ Returns iodata; default path is a flat binary (same bytes, ready to use) | Returns iodata list (typically flattened by caller) |
 | **High-performance allocator** | ✅ mimalloc | System |
 | **Drop-in replacement** | ✅ Same API | - |
 | **Headers-to-maps** | ✅ `headers: true` or explicit keys | ❌ |
@@ -51,7 +51,7 @@ RustyCSV isn't a wrapper around an existing Rust CSV library. It's **custom-buil
 - **Boundary-based sub-binary fields** - SIMD scanner finds field boundaries, then creates BEAM sub-binary references directly (zero-copy for clean fields, copy only when unescaping `""` → `"`)
 - **Dirty scheduler aware** - long-running parallel parses run on dirty CPU schedulers, never blocking your BEAM schedulers
 - **ResourceArc-based streaming** - stateful parser properly integrated with BEAM's garbage collector
-- **Direct term building** - parsing results go straight to BEAM terms; encoding writes directly to a flat binary
+- **Direct term building** - parsing results go straight to BEAM terms; default encoding writes directly to a flat binary
 
 ### Parsing Strategies
 
@@ -84,7 +84,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.3.10"}]
+  [{:rusty_csv, "~> 0.3.11"}]
 end
 ```
 
@@ -142,12 +142,12 @@ All NimbleCSV functions are supported:
 | `parse_string/2` | Parse CSV string to list of rows (or maps with `headers:`) |
 | `parse_stream/2` | Lazily parse a stream (or maps with `headers:`) |
 | `parse_enumerable/2` | Parse any enumerable |
-| `dump_to_iodata/2`* | Convert rows to a flat binary (`strategy: :parallel` for quoting-heavy data) |
+| `dump_to_iodata/2`* | Convert rows to iodata; default path returns a flat binary (`strategy: :parallel` for quoting-heavy data) |
 | `dump_to_stream/1`* | Lazily convert rows to stream of binaries (one per row) |
 | `to_line_stream/1` | Convert arbitrary chunks to lines |
 | `options/0` | Return module configuration |
 
-\* NimbleCSV returns iodata lists; RustyCSV returns flat binaries (same bytes, no flattening needed).
+\* NimbleCSV returns iodata lists; RustyCSV's default encoder returns a flat binary (same bytes, no flattening needed). Parallel encoding and BOM-enabled modules may return list-shaped iodata.
 
 ## Benchmarks
 
@@ -375,9 +375,9 @@ All batch strategies share a single-pass SIMD structural scanner that finds fiel
 
 ## NIF-Accelerated Encoding
 
-RustyCSV's `dump_to_iodata` returns a single flat binary rather than an iodata list. The output bytes are identical to NimbleCSV — the flat binary is ready for use directly with `IO.binwrite/2`, `File.write/2`, or `Conn.send_resp/3` without any flattening step.
+RustyCSV's default `dump_to_iodata` path returns a single flat binary rather than an iodata list. The output bytes are identical to NimbleCSV — the flat binary is ready for use directly with `IO.binwrite/2`, `File.write/2`, or `Conn.send_resp/3` without any flattening step. Parallel encoding and BOM-enabled modules may return list-shaped iodata; use `IO.iodata_to_binary/1` when a binary is required.
 
-> **Note:** NimbleCSV returns an iodata list (nested small binaries) that callers typically flatten back into a binary. RustyCSV skips that roundtrip. Code that pattern-matches on `dump_to_iodata` expecting a list will need adjustment — the return value is a binary, which is valid `t:iodata/0`.
+> **Note:** NimbleCSV returns an iodata list (nested small binaries) that callers typically flatten back into a binary. RustyCSV's default encoder skips that roundtrip. Code that pattern-matches on `dump_to_iodata` expecting a list will need adjustment — callers should treat the return value as `t:iodata/0`.
 
 See [docs/BENCHMARK.md](docs/BENCHMARK.md#encoding-benchmark-results) for encoding throughput and memory numbers.
 

@@ -1,8 +1,9 @@
 // Cross-strategy conformance tests
 //
-// Each scenario runs through all strategies that can produce comparable output.
-// A new scenario automatically tests direct, two_phase, parallel, zero_copy,
-// and streaming parsers. Failures pinpoint which strategy diverges.
+// Each scenario runs through all parser entrypoints that should produce
+// comparable output. A new scenario automatically tests the direct batch
+// parser, the indexed-alias batch parser, parallel, zero_copy, and streaming
+// entrypoints. Failures pinpoint which entrypoint diverges.
 
 use rustycsv::strategy::direct::{parse_csv_full_multi_sep, parse_csv_full_with_config};
 use rustycsv::strategy::parallel::{parse_csv_parallel_multi_sep, parse_csv_parallel_with_config};

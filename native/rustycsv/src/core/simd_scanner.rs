@@ -1,7 +1,8 @@
 // SIMD structural CSV scanner — simdjson-style prefix-XOR quote detection
 //
 // Scans the entire input once, producing a StructuralIndex of all unquoted
-// separators and row endings. All 6 strategies consume this index.
+// separators and row endings. Both batch code paths consume this index: the
+// :simd family (:simd, :basic, :indexed, :zero_copy) and :parallel.
 //
 // ## Stabilization-safe API subset (std::simd)
 //

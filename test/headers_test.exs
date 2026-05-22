@@ -5,8 +5,9 @@ defmodule RustyCSV.HeadersTest do
   alias RustyCSV.TestHeaders.FlexSep
   alias RustyCSV.TestHeaders.MultiEsc
   alias RustyCSV.TestHeaders.MultiSep
+  alias RustyCSV.TestStrategyMatrix
 
-  @strategies [:basic, :simd, :indexed, :parallel, :zero_copy]
+  @strategies TestStrategyMatrix.batch_strategy_atoms()
 
   # ============================================================================
   # Cross-strategy consistency — the most important test

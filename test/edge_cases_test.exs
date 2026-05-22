@@ -10,6 +10,7 @@ defmodule EdgeCasesTest do
   use ExUnit.Case
 
   alias RustyCSV.RFC4180, as: CSV
+  alias RustyCSV.TestStrategyMatrix
 
   describe "basic parsing" do
     test "empty input string" do
@@ -272,7 +273,7 @@ defmodule EdgeCasesTest do
   end
 
   describe "all strategies produce identical output" do
-    @strategies [:basic, :simd, :indexed, :parallel, :zero_copy]
+    @strategies TestStrategyMatrix.batch_strategy_atoms()
     @test_cases [
       {"simple", "a,b,c\n1,2,3\n"},
       {"quoted", "\"a,b\",c\n1,\"2,3\"\n"},

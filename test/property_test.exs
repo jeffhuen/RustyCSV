@@ -12,6 +12,7 @@ defmodule RustyCSV.PropertyTest do
   use ExUnitProperties
 
   alias RustyCSV.RFC4180, as: CSV
+  alias RustyCSV.TestStrategyMatrix
 
   # ============================================================================
   # Generators
@@ -111,12 +112,17 @@ defmodule RustyCSV.PropertyTest do
   # ============================================================================
 
   property "streaming produces same result as batch parsing for clean CSV" do
-    check all(rows <- clean_csv(), max_runs: 100) do
+    check all(
+            rows <- clean_csv(),
+            chunk_sizes <-
+              StreamData.list_of(StreamData.integer(1..50), min_length: 1, max_length: 50),
+            max_runs: 100
+          ) do
       csv = rows_to_csv(rows)
       batch = CSV.parse_string(csv, skip_headers: false)
 
-      # Stream in random-sized chunks
-      chunks = chunk_binary(csv, 1..50)
+      # Chunking is generator-driven so failures are reproducible under the test seed.
+      chunks = chunk_binary(csv, chunk_sizes)
 
       streamed =
         chunks
@@ -135,7 +141,7 @@ defmodule RustyCSV.PropertyTest do
 
   property "no strategy panics on arbitrary binary input" do
     check all(input <- adversarial_binary(), max_runs: 300) do
-      for strategy <- [:basic, :simd, :indexed, :parallel, :zero_copy] do
+      for strategy <- TestStrategyMatrix.batch_strategy_atoms() do
         # Should either return a result or raise a clean Elixir error, never panic
         try do
           CSV.parse_string(input, strategy: strategy, skip_headers: false)
@@ -167,16 +173,21 @@ defmodule RustyCSV.PropertyTest do
   # Helpers
   # ============================================================================
 
-  # Split a binary into chunks of random sizes within the given range
-  defp chunk_binary(bin, range) do
-    chunk_binary(bin, range, [])
+  # Split a binary into chunks using the provided sequence of chunk sizes.
+  # Sizes are cycled so the property stays deterministic for a given generator seed.
+  defp chunk_binary(bin, chunk_sizes) do
+    chunk_binary(bin, chunk_sizes, chunk_sizes, [])
   end
 
-  defp chunk_binary(<<>>, _range, acc), do: Enum.reverse(acc)
+  defp chunk_binary(<<>>, _chunk_sizes, _original_chunk_sizes, acc), do: Enum.reverse(acc)
 
-  defp chunk_binary(bin, min..max//_, acc) do
-    size = min(Enum.random(min..max), byte_size(bin))
-    <<chunk::binary-size(size), rest::binary>> = bin
-    chunk_binary(rest, min..max, [chunk | acc])
+  defp chunk_binary(bin, [], original_chunk_sizes, acc) do
+    chunk_binary(bin, original_chunk_sizes, original_chunk_sizes, acc)
+  end
+
+  defp chunk_binary(bin, [size | remaining_sizes], original_chunk_sizes, acc) do
+    size = min(size, byte_size(bin))
+    <<chunk::binary-size(size), remaining_bin::binary>> = bin
+    chunk_binary(remaining_bin, remaining_sizes, original_chunk_sizes, [chunk | acc])
   end
 end

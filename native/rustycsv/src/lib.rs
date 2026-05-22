@@ -23,6 +23,7 @@ mod atoms {
         mutex_poisoned,
         buffer_overflow,
         input_too_large,
+        non_binary_field,
     }
 }
 
@@ -51,6 +52,11 @@ fn guard_input_size<'a>(env: Env<'a>, input: &[u8]) -> Result<(), Term<'a>> {
     } else {
         Ok(())
     }
+}
+
+fn decode_field_binary<'a>(env: Env<'a>, term: Term<'a>) -> Result<Binary<'a>, Term<'a>> {
+    term.decode()
+        .map_err(|_| (atoms::error(), atoms::non_binary_field()).encode(env))
 }
 
 /// Separators: list of patterns. Each pattern can be multi-byte.
@@ -1156,7 +1162,10 @@ fn encode_string_none<'a>(
                     buf.push(dump_sep);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
                 let needs_quoting = if multi_sep {
                     field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
@@ -1183,7 +1192,10 @@ fn encode_string_none<'a>(
                     buf.extend_from_slice(sep_pattern);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
                 if field_needs_quoting_general(field_bytes, sep_pattern, esc_pattern, reserved) {
                     write_quoted_field_general(&mut buf, field_bytes, esc_pattern);
@@ -1237,7 +1249,10 @@ fn encode_string_formula<'a>(
                     buf.push(dump_sep);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
                 let needs_quoting = if multi_sep {
                     field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
@@ -1275,7 +1290,10 @@ fn encode_string_formula<'a>(
                     buf.extend_from_slice(sep_pattern);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
                 let needs_quoting =
                     field_needs_quoting_general(field_bytes, sep_pattern, esc_pattern, reserved);
@@ -1343,7 +1361,10 @@ fn encode_string_encoding<'a>(
                     buf.extend_from_slice(&sep_encoded);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
                 let needs_quoting = if multi_sep {
                     field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
@@ -1374,7 +1395,10 @@ fn encode_string_encoding<'a>(
                     buf.extend_from_slice(&sep_encoded);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
 
                 let utf8_src: &[u8] =
@@ -1439,7 +1463,10 @@ fn encode_string_full<'a>(
                     buf.extend_from_slice(&sep_encoded);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
                 let needs_quoting = if multi_sep {
                     field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
@@ -1486,7 +1513,10 @@ fn encode_string_full<'a>(
                     buf.extend_from_slice(&sep_encoded);
                 }
                 first = false;
-                let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+                let field_bin = match decode_field_binary(env, field_term) {
+                    Ok(bin) => bin,
+                    Err(term) => return Ok(term),
+                };
                 let field_bytes = field_bin.as_slice();
                 let needs_quoting =
                     field_needs_quoting_general(field_bytes, sep_pattern, esc_pattern, reserved);
@@ -1582,7 +1612,10 @@ fn encode_string_parallel<'a>(
         let field_iter: ListIterator<'a> = row_term.decode().map_err(|_| Error::BadArg)?;
         let mut row_fields: Vec<Vec<u8>> = Vec::new();
         for field_term in field_iter {
-            let field_bin: Binary<'a> = field_term.decode().map_err(|_| Error::BadArg)?;
+            let field_bin = match decode_field_binary(env, field_term) {
+                Ok(bin) => bin,
+                Err(term) => return Ok(term),
+            };
             row_fields.push(field_bin.as_slice().to_vec());
         }
         all_rows.push(row_fields);

@@ -10,6 +10,7 @@ defmodule RustyCSV.ConcurrentAccessTest do
   use ExUnit.Case, async: true
 
   alias RustyCSV.Native
+  alias RustyCSV.TestStrategyMatrix
 
   # ============================================================================
   # Concurrent streaming: many processes, one parser
@@ -144,7 +145,7 @@ defmodule RustyCSV.ConcurrentAccessTest do
           Task.async(fn ->
             csv = "h1,h2\nval_#{i}_1,val_#{i}_2\n"
 
-            for strategy <- [:basic, :simd, :indexed, :parallel, :zero_copy] do
+            for strategy <- TestStrategyMatrix.batch_strategy_atoms() do
               result = RustyCSV.RFC4180.parse_string(csv, strategy: strategy, skip_headers: false)
 
               assert result == [["h1", "h2"], ["val_#{i}_1", "val_#{i}_2"]]
@@ -156,8 +157,8 @@ defmodule RustyCSV.ConcurrentAccessTest do
       results = Task.await_many(tasks, 15_000)
       assert length(results) == 50
 
-      # Each task tested all 5 strategies
-      assert Enum.all?(results, &(length(&1) == 5))
+      # Each task exercised all 5 public batch strategy atoms.
+      assert Enum.all?(results, &(length(&1) == TestStrategyMatrix.batch_strategy_atom_count()))
     end
 
     test "many processes parsing the same large CSV concurrently" do

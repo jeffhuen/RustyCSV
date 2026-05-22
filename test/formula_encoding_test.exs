@@ -622,11 +622,9 @@ defmodule RustyCSV.FormulaEncodingTest do
           end
         end
 
-      # parallel not supported for multi-byte sep/esc, but UTF-16 with
-      # single-byte sep (\t) should work through the sequential fallback
-      rusty = RUTF16.dump_to_iodata(rows) |> IO.iodata_to_binary()
-      nimble = NUTF16.dump_to_iodata(rows) |> IO.iodata_to_binary()
-      assert rusty == nimble
+      # Tab separator and quote escape are single-byte, so this exercises the
+      # real parallel encoder path with non-UTF-8 output.
+      assert_identical(RUTF16, NUTF16, rows, strategy: :parallel)
     end
 
     test "Full: parallel matches NimbleCSV (formula + UTF-16)" do
@@ -640,9 +638,9 @@ defmodule RustyCSV.FormulaEncodingTest do
           end
         end
 
-      # Sequential NIF — the parallel NIF only supports single-byte sep/esc
-      # and the tab separator is single-byte, so we can compare sequential output
-      assert_identical(RFormulaUTF16, NFormulaUTF16, rows)
+      # Tab separator and quote escape are single-byte, so this exercises the
+      # real parallel encoder path with formula escaping and UTF-16 output.
+      assert_identical(RFormulaUTF16, NFormulaUTF16, rows, strategy: :parallel)
     end
 
     test "None: parallel matches NimbleCSV" do

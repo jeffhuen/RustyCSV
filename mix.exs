@@ -1,7 +1,7 @@
 defmodule RustyCSV.MixProject do
   use Mix.Project
 
-  @version "0.3.10"
+  @version "0.3.11"
   @source_url "https://github.com/jeffhuen/rustycsv"
 
   def project do
@@ -10,6 +10,7 @@ defmodule RustyCSV.MixProject do
       version: @version,
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
 
       # Hex
@@ -19,12 +20,6 @@ defmodule RustyCSV.MixProject do
       # Docs
       name: "RustyCSV",
       docs: docs()
-    ]
-  end
-
-  def application do
-    [
-      extra_applications: [:logger]
     ]
   end
 
@@ -83,7 +78,7 @@ defmodule RustyCSV.MixProject do
         Streaming: [
           RustyCSV.Streaming
         ],
-        "Low-Level": [
+        Internal: [
           RustyCSV.Native
         ]
       ],
@@ -97,14 +92,17 @@ defmodule RustyCSV.MixProject do
 
   defp deps do
     [
-      {:rustler, "~> 0.37", optional: true},
-      {:rustler_precompiled, "~> 0.8"},
+      {:rustler, "~> 0.37.3", optional: true},
+      {:rustler_precompiled, "~> 0.9"},
       {:nimble_csv, "~> 1.2", only: [:dev, :test]},
-      {:stream_data, "~> 1.0", only: [:dev, :test]},
+      {:stream_data, "~> 1.3", only: [:dev, :test]},
       {:benchee, "~> 1.0", only: :dev},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 end

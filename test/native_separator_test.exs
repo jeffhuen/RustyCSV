@@ -1,7 +1,7 @@
 defmodule NativeSeparatorTest do
   @moduledoc """
-  Tests that all 6 NIF strategies accept integer, binary, and list-of-binaries separators,
-  and both integer and binary escape values.
+  Tests that all 6 low-level parser entrypoints accept integer, binary, and
+  list-of-binaries separators, and both integer and binary escape values.
   """
   use ExUnit.Case
 

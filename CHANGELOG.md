@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] - 2026-05-22
+
+### Fixed
+
+- **Dumping error handling** - high-level dump APIs still coerce non-binary fields, but no longer mask unrelated `ArgumentError` failures
+- **Truncated encoded streams** - non-UTF-8 streaming parsers now raise `RustyCSV.ParseError` instead of silently dropping an incomplete trailing character
+
+### Documentation
+
+- Corrected parser specs and `dump_to_iodata/2` docs to match actual return shapes
+- Clarified that `RustyCSV.Native` is an internal NIF binding module
+
+### Maintenance
+
+- Updated Hex and Cargo dependencies
+
 ## [0.3.10] - 2026-03-03
 
 ### Fixed

@@ -72,7 +72,7 @@ RustyCSV is designed as a drop-in replacement for NimbleCSV. It implements the c
 | `parse_string/2` | Parse CSV string to list of rows | ✅ |
 | `parse_stream/2` | Lazily parse a stream | ✅ |
 | `parse_enumerable/2` | Parse any enumerable | ✅ |
-| `dump_to_iodata/1` | Convert rows to iodata (returns flat binary — see [Encoding](#nif-accelerated-encoding-flat-binary)) | ✅ |
+| `dump_to_iodata/1` | Convert rows to iodata (default path returns a flat binary — see [Encoding](#nif-accelerated-encoding-flat-binary)) | ✅ |
 | `dump_to_stream/1` | Lazily convert rows to iodata stream | ✅ |
 | `to_line_stream/1` | Convert arbitrary chunks to lines | ✅ |
 | `options/0` | Return module configuration | ✅ |
@@ -336,7 +336,7 @@ headers: true/[...]       →  new NIFs       →  boundaries_to_maps_hybrid (li
 
 ### NIF-Accelerated Encoding (Flat Binary)
 
-`dump_to_iodata` dispatches to the `encode_string` Rust NIF, which writes CSV bytes into a `Vec<u8>` and returns a single flat binary via `NewBinary`.
+`dump_to_iodata` dispatches to the `encode_string` Rust NIF by default, which writes CSV bytes into a `Vec<u8>` and returns a single flat binary via `NewBinary`. Parallel encoding and BOM-enabled modules may return list-shaped iodata at the Elixir wrapper layer.
 
 **Why flat binary instead of iodata:**
 

@@ -4,6 +4,8 @@ defmodule CustomNewlineTest do
   """
   use ExUnit.Case
 
+  alias RustyCSV.TestStrategyMatrix
+
   # Define parsers with custom newlines
   RustyCSV.define(PipeNewline,
     separator: ",",
@@ -51,7 +53,7 @@ defmodule CustomNewlineTest do
       csv = "a,b|1,2|"
       expected = [["a", "b"], ["1", "2"]]
 
-      for strategy <- [:basic, :simd, :indexed, :parallel, :zero_copy] do
+      for strategy <- TestStrategyMatrix.batch_strategy_atoms() do
         result = PipeNewline.parse_string(csv, skip_headers: false, strategy: strategy)
         assert result == expected, "Failed for strategy: #{strategy}"
       end
@@ -101,7 +103,7 @@ defmodule CustomNewlineTest do
       csv = "a,b<br>1,2<br>"
       expected = [["a", "b"], ["1", "2"]]
 
-      for strategy <- [:basic, :simd, :indexed, :parallel, :zero_copy] do
+      for strategy <- TestStrategyMatrix.batch_strategy_atoms() do
         result = BrNewline.parse_string(csv, skip_headers: false, strategy: strategy)
         assert result == expected, "Failed for strategy: #{strategy}"
       end

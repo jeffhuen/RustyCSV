@@ -1,6 +1,6 @@
 [package]
 name = "rustycsv"
-version = "0.3.10"
+version = "0.3.11"
 authors = ["Jeff Huen"]
 edition = "2021"
 
@@ -10,13 +10,13 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-rustler = { git = "https://github.com/rusterlium/rustler.git", rev = "b539c3bb5b8730ac07475f972788464c14e7ab5d" }
-rayon = "1.10"    # Data parallelism for parallel parsing
-thiserror = "2"   # Idiomatic error types for library code
-mimalloc = { version = "0.1", default-features = false, optional = true }
+rustler = "0.37.4"
+rayon = "1.12"      # Data parallelism for parallel parsing
+thiserror = "2.0"   # Idiomatic error types for library code
+mimalloc = { version = "0.1.52", default-features = false, optional = true }
 
 [target.'cfg(target_env = "musl")'.dependencies]
-mimalloc = { version = "0.1", default-features = false, optional = true, features = ["local_dynamic_tls"] }
+mimalloc = { version = "0.1.52", default-features = false, optional = true, features = ["local_dynamic_tls"] }
 
 [features]
 default = ["mimalloc"]

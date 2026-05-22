@@ -136,20 +136,23 @@ A comprehensive edge case test suite inspired by PapaParse, covering malformed i
 
 ## Cross-Strategy Validation
 
-All parsing strategies must produce identical output for the same input. This is verified by running every test file through all six strategies:
+All public batch strategy atoms must produce identical output for the same input.
+This is verified by running the shared batch suites across all five public batch
+atoms. `parse_stream/2` is validated separately against batch parsing because it
+uses a different stateful parser.
 
-| Strategy | Description | Validates Against |
-|----------|-------------|-------------------|
-| `:basic` | SIMD scan + basic field extraction | All test suites |
-| `:simd` | SIMD structural scanner (default) | All test suites |
-| `:indexed` | SIMD scan + two-phase index-then-extract | All test suites |
-| `:parallel` | SIMD scan + multi-threaded via rayon | All test suites |
-| `:zero_copy` | SIMD scan + sub-binary references | All test suites |
-| `:streaming` | Stateful chunked parser | All test suites |
+| Entry Point | Description | Validates Against |
+|-------------|-------------|-------------------|
+| `:basic` | Public alias of the SIMD batch path | Shared batch suites |
+| `:simd` | SIMD batch path (default) | Shared batch suites |
+| `:indexed` | Public alias of the SIMD batch path | Shared batch suites |
+| `:parallel` | Parallel batch path via rayon | Shared batch suites |
+| `:zero_copy` | Public alias of the SIMD batch path | Shared batch suites |
+| `parse_stream/2` | Stateful streaming parser | Stream-vs-batch consistency tests |
 
 ```elixir
-# From test/csv_spectrum_test.exs
-for strategy <- [:basic, :simd, :indexed, :parallel] do
+# Shared batch-strategy atom matrix
+for strategy <- [:basic, :simd, :indexed, :parallel, :zero_copy] do
   test "all tests pass with #{strategy} strategy" do
     for name <- test_files do
       result = CSV.parse_string(csv, strategy: strategy)

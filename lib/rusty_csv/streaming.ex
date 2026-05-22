@@ -319,25 +319,40 @@ defmodule RustyCSV.Streaming do
 
   # Convert stream from source encoding to UTF-8, handling multi-byte boundaries
   defp convert_stream_to_utf8(stream, encoding) do
-    Stream.transform(stream, <<>>, fn chunk, acc ->
-      input = acc <> chunk
+    Stream.transform(
+      stream,
+      fn -> <<>> end,
+      fn chunk, acc ->
+        input = acc <> chunk
 
-      case :unicode.characters_to_binary(input, encoding, :utf8) do
-        binary when is_binary(binary) ->
-          # Full conversion succeeded
-          {[binary], <<>>}
+        case :unicode.characters_to_binary(input, encoding, :utf8) do
+          binary when is_binary(binary) ->
+            # Full conversion succeeded
+            {[binary], <<>>}
 
-        {:incomplete, converted, rest} ->
-          # Partial conversion - rest contains incomplete multi-byte sequence
-          {[converted], rest}
+          {:incomplete, converted, rest} ->
+            # Partial conversion - rest contains incomplete multi-byte sequence
+            {[converted], rest}
 
-        {:error, converted, rest} ->
+          {:error, converted, rest} ->
+            raise RustyCSV.ParseError,
+              message:
+                "Invalid #{inspect(encoding)} sequence at byte #{byte_size(converted)}: " <>
+                  "#{inspect(binary_part(rest, 0, min(byte_size(rest), 10)))}"
+        end
+      end,
+      fn
+        <<>> ->
+          {[], <<>>}
+
+        rest ->
           raise RustyCSV.ParseError,
             message:
-              "Invalid #{inspect(encoding)} sequence at byte #{byte_size(converted)}: " <>
+              "Truncated #{inspect(encoding)} sequence at end of input: " <>
                 "#{inspect(binary_part(rest, 0, min(byte_size(rest), 10)))}"
-      end
-    end)
+      end,
+      fn _acc -> :ok end
+    )
   end
 
   @doc """

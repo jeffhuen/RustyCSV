@@ -76,17 +76,19 @@ defmodule RustyCSV do
       CSV.dump_to_iodata([["name", "age"], ["john", "27"]])
       #=> "name,age\njohn,27\n"
 
-  Encoding uses a SIMD-accelerated Rust NIF that writes all CSV bytes into
-  a single flat binary. The NIF handles four modes: plain UTF-8, UTF-8 with
-  formula escaping, non-UTF-8 encoding, and both combined.
+  Encoding uses SIMD-accelerated Rust NIFs. The default encoder writes CSV bytes
+  into a single flat binary. The parallel encoder and BOM-enabled parsers return
+  iodata, which can be flattened with `IO.iodata_to_binary/1` when a binary is
+  required. The NIF handles four modes: plain UTF-8, UTF-8 with formula escaping,
+  non-UTF-8 encoding, and both combined.
 
   > **Difference from NimbleCSV:** NimbleCSV's `dump_to_iodata/1` returns an
   > iodata list (a nested list of small binaries) that callers typically flatten
   > back into a single binary via `IO.iodata_to_binary/1` before writing to a
-  > file, sending as a download, or passing to an API. RustyCSV skips that
-  > roundtrip — it returns the final binary directly, ready for use with
+  > file, sending as a download, or passing to an API. RustyCSV's default encoder
+  > skips that roundtrip and returns the final binary directly, ready for use with
   > `IO.binwrite/2`, `Conn.send_resp/3`, `:gen_tcp.send/2`, `File.write/2`,
-  > etc. The output bytes are identical; there is nothing to traverse or flatten.
+  > etc. The output bytes are identical.
   >
   > Code that pattern-matches on the return value expecting a list will need
   > adjustment. This is a deliberate trade-off: building an iodata list across
@@ -139,7 +141,7 @@ defmodule RustyCSV do
     * `parse_string/2` - Parse CSV string to list of rows
     * `parse_stream/2` - Lazily parse a stream
     * `parse_enumerable/2` - Parse any enumerable
-    * `dump_to_iodata/2` - Convert rows to iodata (returns a flat binary, not an iodata list — see "Encoding" section)
+    * `dump_to_iodata/2` - Convert rows to iodata (the default encoder returns a flat binary — see "Encoding" section)
     * `dump_to_stream/1` - Lazily convert rows to iodata stream
     * `to_line_stream/1` - Convert arbitrary chunks to lines
     * `options/0` - Return module configuration
@@ -292,6 +294,16 @@ defmodule RustyCSV do
   Multiple rows of CSV data.
   """
   @type rows :: [row()]
+
+  @typedoc """
+  Error returned by batch parsers when the input exceeds the native index limit.
+  """
+  @type parse_error :: {:error, :input_too_large}
+
+  @typedoc """
+  Result returned by parsing functions.
+  """
+  @type parse_result :: rows() | [map()] | parse_error()
 
   @typedoc """
   Parsing strategy to use.
@@ -487,12 +499,12 @@ defmodule RustyCSV do
   @doc """
   Parses a CSV string into a list of rows.
   """
-  @callback parse_string(binary()) :: rows()
+  @callback parse_string(binary()) :: rows() | parse_error()
 
   @doc """
   Parses a CSV string into a list of rows with options.
   """
-  @callback parse_string(binary(), parse_options()) :: rows()
+  @callback parse_string(binary(), parse_options()) :: parse_result()
 
   @doc """
   Lazily parses a stream of CSV data into a stream of rows.
@@ -507,20 +519,21 @@ defmodule RustyCSV do
   @doc """
   Eagerly parses an enumerable of CSV data into a list of rows.
   """
-  @callback parse_enumerable(Enumerable.t()) :: rows()
+  @callback parse_enumerable(Enumerable.t()) :: rows() | [map()]
 
   @doc """
   Eagerly parses an enumerable of CSV data into a list of rows with options.
   """
-  @callback parse_enumerable(Enumerable.t(), parse_options()) :: rows()
+  @callback parse_enumerable(Enumerable.t(), parse_options()) :: rows() | [map()]
 
   @doc """
   Converts rows to iodata in CSV format.
 
-  Returns a single flat binary (not an iodata list). A binary is valid
-  `t:iodata/0`, so it works with `IO.binwrite/2`, `IO.iodata_to_binary/1`,
-  etc. See "Encoding (Dumping)" in the module doc for details on how this
-  differs from NimbleCSV.
+  Returns iodata. For the default encoder without a BOM this is a single flat
+  binary. `:parallel` encoding and BOM-enabled modules may return list-shaped
+  iodata. Use `IO.iodata_to_binary/1` when a binary is required. See
+  "Encoding (Dumping)" in the module doc for details on how this differs from
+  NimbleCSV.
 
   ## Options
 
@@ -792,7 +805,7 @@ defmodule RustyCSV do
           unquote(quoted_module_header(config))
           unquote(quoted_config_function(config))
           unquote_splicing(quoted_parsing_functions(config))
-          unquote(quoted_dumping_functions(config))
+          unquote_splicing(quoted_dumping_functions())
         end
       end
 
@@ -906,7 +919,7 @@ defmodule RustyCSV do
       #{unquote(encoding_doc)}
       """
       @impl RustyCSV
-      @spec parse_string(binary(), RustyCSV.parse_options()) :: RustyCSV.rows() | [map()]
+      @spec parse_string(binary(), RustyCSV.parse_options()) :: RustyCSV.parse_result()
       def parse_string(string, opts \\ [])
 
       def parse_string(string, opts) when is_binary(string) and is_list(opts) do
@@ -1185,7 +1198,8 @@ defmodule RustyCSV do
       Eagerly parses an enumerable of CSV data into a list of rows.
       """
       @impl RustyCSV
-      @spec parse_enumerable(Enumerable.t(), RustyCSV.parse_options()) :: RustyCSV.rows()
+      @spec parse_enumerable(Enumerable.t(), RustyCSV.parse_options()) ::
+              RustyCSV.rows() | [map()]
       def parse_enumerable(enumerable, opts \\ [])
 
       def parse_enumerable(enumerable, opts) when is_list(opts) do
@@ -1246,14 +1260,23 @@ defmodule RustyCSV do
     end
   end
 
-  defp quoted_dumping_functions(_config) do
+  defp quoted_dumping_functions do
+    [
+      quoted_dump_to_iodata_function(),
+      quoted_encode_rows_nif_helpers(),
+      quoted_dump_retry_helpers(),
+      quoted_dump_to_stream_function()
+    ]
+  end
+
+  defp quoted_dump_to_iodata_function do
     quote do
       @doc """
       Converts an enumerable of rows to iodata in CSV format.
 
-      Returns a single flat binary (valid `t:iodata/0`). Unlike NimbleCSV,
-      which returns an iodata list, RustyCSV writes all CSV bytes into one
-      contiguous binary in the NIF for better performance and lower memory use.
+      Returns iodata. For the default encoder without a BOM this is a single
+      flat binary. `:parallel` encoding and BOM-enabled modules may return
+      list-shaped iodata.
 
       ## Options
 
@@ -1275,7 +1298,11 @@ defmodule RustyCSV do
       def dump_to_iodata(enumerable, opts \\ []) do
         rows = if is_list(enumerable), do: enumerable, else: Enum.to_list(enumerable)
         strategy = Keyword.get(opts, :strategy)
-        result = encode_rows_nif(rows, strategy)
+
+        result =
+          rows
+          |> encode_rows_nif(strategy)
+          |> retry_with_coerced_fields(rows, strategy)
 
         if @dump_bom do
           [@bom, result]
@@ -1283,7 +1310,11 @@ defmodule RustyCSV do
           result
         end
       end
+    end
+  end
 
+  defp quoted_encode_rows_nif_helpers do
+    quote do
       defp encode_rows_nif(rows, :parallel) do
         RustyCSV.Native.encode_string_parallel(
           rows,
@@ -1294,19 +1325,6 @@ defmodule RustyCSV do
           @encoding,
           @reserved_binaries
         )
-      rescue
-        ArgumentError ->
-          rows = coerce_fields_to_binary(rows)
-
-          RustyCSV.Native.encode_string_parallel(
-            rows,
-            @separator_binaries,
-            @escape_binary,
-            @line_separator,
-            @formula_nif_config,
-            @encoding,
-            @reserved_binaries
-          )
       end
 
       defp encode_rows_nif(rows, _strategy) do
@@ -1319,30 +1337,35 @@ defmodule RustyCSV do
           @encoding,
           @reserved_binaries
         )
-      rescue
-        ArgumentError ->
-          rows = coerce_fields_to_binary(rows)
-
-          RustyCSV.Native.encode_string(
-            rows,
-            @separator_binaries,
-            @escape_binary,
-            @line_separator,
-            @formula_nif_config,
-            @encoding,
-            @reserved_binaries
-          )
       end
+    end
+  end
+
+  defp quoted_dump_retry_helpers do
+    quote do
+      defp retry_with_coerced_fields({:error, :non_binary_field}, rows, strategy) do
+        rows
+        |> coerce_fields_to_binary()
+        |> encode_rows_nif(strategy)
+      end
+
+      defp retry_with_coerced_fields(result, _rows, _strategy), do: result
 
       defp coerce_fields_to_binary(rows) do
-        Enum.map(rows, fn row ->
-          Enum.map(row, fn
-            field when is_binary(field) -> field
-            field -> to_string(field)
-          end)
-        end)
+        Enum.map(rows, &coerce_row_fields_to_binary/1)
       end
 
+      defp coerce_row_fields_to_binary(row) do
+        Enum.map(row, fn
+          field when is_binary(field) -> field
+          field -> to_string(field)
+        end)
+      end
+    end
+  end
+
+  defp quoted_dump_to_stream_function do
+    quote do
       @doc """
       Lazily converts an enumerable of rows to a stream of iodata.
       """
@@ -1353,32 +1376,13 @@ defmodule RustyCSV do
       end
 
       defp encode_single_row_nif(row) do
-        RustyCSV.Native.encode_string(
-          [row],
-          @separator_binaries,
-          @escape_binary,
-          @line_separator,
-          @formula_nif_config,
-          @encoding,
-          @reserved_binaries
-        )
-      rescue
-        ArgumentError ->
-          row =
-            Enum.map(row, fn
-              field when is_binary(field) -> field
-              field -> to_string(field)
-            end)
+        case encode_rows_nif([row], nil) do
+          {:error, :non_binary_field} ->
+            encode_rows_nif([coerce_row_fields_to_binary(row)], nil)
 
-          RustyCSV.Native.encode_string(
-            [row],
-            @separator_binaries,
-            @escape_binary,
-            @line_separator,
-            @formula_nif_config,
-            @encoding,
-            @reserved_binaries
-          )
+          result ->
+            result
+        end
       end
     end
   end

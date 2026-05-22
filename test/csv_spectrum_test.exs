@@ -10,6 +10,7 @@ defmodule CsvSpectrumTest do
   use ExUnit.Case
 
   alias RustyCSV.RFC4180, as: CSV
+  alias RustyCSV.TestStrategyMatrix
 
   @fixtures_path "test/fixtures/csv-spectrum"
 
@@ -108,7 +109,7 @@ defmodule CsvSpectrumTest do
   end
 
   describe "csv-spectrum with all strategies" do
-    @strategies [:basic, :simd, :indexed, :parallel, :zero_copy]
+    @strategies TestStrategyMatrix.batch_strategy_atoms()
 
     for strategy <- @strategies do
       test "all tests pass with #{strategy} strategy" do

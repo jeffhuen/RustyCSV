@@ -11,6 +11,7 @@ defmodule RFC4180TestDataTest do
   use ExUnit.Case
 
   alias RustyCSV.RFC4180, as: CSV
+  alias RustyCSV.TestStrategyMatrix
 
   @fixtures_path "test/fixtures/csv-test-data"
 
@@ -150,7 +151,7 @@ defmodule RFC4180TestDataTest do
   end
 
   describe "all strategies produce consistent results" do
-    @strategies [:basic, :simd, :indexed, :parallel, :zero_copy]
+    @strategies TestStrategyMatrix.batch_strategy_atoms()
     @test_files ~w(simple-lf quotes-with-comma quotes-with-escaped-quote quotes-with-newline utf8)
 
     for strategy <- @strategies do
