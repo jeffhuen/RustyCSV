@@ -33,7 +33,7 @@
 | **Parsing strategies** | 3 (SIMD, parallel, streaming) | 1 |
 | **SIMD acceleration** | ✅ via `std::simd` portable SIMD | ❌ |
 | **Parallel parsing** | ✅ via rayon | ❌ |
-| **Arbitrary-chunk streaming** | ✅ directly via `parse_stream/2` | ✅ via `to_line_stream/1` |
+| **Arbitrary binary chunks** | Directly through `parse_stream/2` | Through `to_line_stream/1` before `parse_stream/2` |
 | **Multi-separator support** | ✅ `[",", ";"]`, `"::"` | ✅ |
 | **Encoding support** | ✅ UTF-8, UTF-16, Latin-1, UTF-32 | ✅ |
 | **Memory model** | Sub-binary references | Sub-binary references |
