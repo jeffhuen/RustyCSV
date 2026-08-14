@@ -96,7 +96,7 @@ fn extract_positions(mut mask: u64, base_pos: u32, out: &mut Vec<u32>) {
 // an opening quote has odd parity at its own position, a closing quote even.
 
 /// Byte-level context that a chunk needs from the chunk before it.
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone)]
 struct QuoteCarry {
     /// Previous byte may legally precede an opening quote. Start of input
     /// counts, which is why this starts `true`.

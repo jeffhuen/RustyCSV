@@ -28,6 +28,13 @@ harness = false
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { version = "0.1.52", default-features = false, optional = true, features = ["local_dynamic_tls"] }
 
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+
 [features]
 default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]

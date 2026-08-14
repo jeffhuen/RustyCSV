@@ -197,9 +197,19 @@ mod tracking {
     #[cfg(not(feature = "mimalloc"))]
     static UNDERLYING: std::alloc::System = std::alloc::System;
 
+    // SAFETY: `GlobalAlloc` requires that a returned block be valid for the
+    // requested layout, that the allocator never unwind, and that `dealloc`
+    // receive a pointer and layout previously produced by this same allocator.
+    // Every one of those obligations is discharged by `UNDERLYING`, which is
+    // either mimalloc or the system allocator; this type only wraps those calls
+    // in relaxed atomic counters. The counters are statistics rather than
+    // allocator state, so a torn reading skews a profiling number and cannot
+    // affect memory safety, and neither counter path can panic or unwind.
     unsafe impl GlobalAlloc for TrackingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let ptr = UNDERLYING.alloc(layout);
+            // SAFETY: `layout` is forwarded unchanged from our caller, who
+            // already owes `GlobalAlloc::alloc` a non-zero-size layout.
+            let ptr = unsafe { UNDERLYING.alloc(layout) };
             if !ptr.is_null() {
                 let current = ALLOCATED.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
                 let mut peak = PEAK_ALLOCATED.load(Ordering::Relaxed);
@@ -220,7 +230,12 @@ mod tracking {
 
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
             ALLOCATED.fetch_sub(layout.size(), Ordering::Relaxed);
-            UNDERLYING.dealloc(ptr, layout)
+            // SAFETY: `ptr` and `layout` are forwarded unchanged from our
+            // caller, who already owes `GlobalAlloc::dealloc` a pointer this
+            // allocator produced for exactly this layout. Every such pointer
+            // came from `UNDERLYING::alloc` above, so `UNDERLYING` is the
+            // correct allocator to hand it back to.
+            unsafe { UNDERLYING.dealloc(ptr, layout) }
         }
     }
 }

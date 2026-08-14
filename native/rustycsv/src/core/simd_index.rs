@@ -23,7 +23,7 @@ pub struct RowEnd {
 /// so a caller that does not ask for strict behaviour pays nothing and sees
 /// the same rows it always did. `RustyCSV.ParseError` is raised at the Elixir
 /// boundary from this value; the scanner itself never panics.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Violation {
     /// A quote opened a field somewhere other than the start of a field.
     /// Byte position of the offending quote.
