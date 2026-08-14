@@ -232,9 +232,8 @@ trackers.
 
 RustyCSV errors therefore contain a stable category and byte position, never
 field contents. Synthetic CSV content may appear in tests, but real user
-fixtures must be scrubbed. This is required by
-[Rule 21](../.claude/rules/rust_programming.md) and is an intentional security
-difference, not an unfinished parity item.
+fixtures must be scrubbed. This is an intentional security difference, not an
+unfinished parity item.
 
 Temporarily changing production errors to include raw CSV would test behavior
 that will not ship and risks committing a data leak. Future parity checks should

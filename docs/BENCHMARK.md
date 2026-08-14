@@ -1,6 +1,9 @@
 # RustyCSV Benchmarks
 
-This document presents benchmark results comparing RustyCSV's parsing and encoding performance against pure Elixir (NimbleCSV 1.3.0).
+This document records the latest published full benchmark run comparing
+RustyCSV with pure Elixir (NimbleCSV 1.3.0). The results were collected with
+RustyCSV 0.3.6 and are retained as a historical baseline; they are not a
+RustyCSV 0.4.0 performance verification.
 
 ## Test Environment
 
@@ -195,7 +198,10 @@ This section presents results from parsing Amazon SP-API settlement reports in T
 
 ## Encoding Benchmark Results
 
-The default `dump_to_iodata` path returns a single flat binary. Parallel encoding and BOM-enabled modules may return list-shaped iodata. See the [README](../README.md#nif-accelerated-encoding) for usage details and how this differs from pure Elixir.
+RustyCSV 0.4.0 returns one list-shaped iodata element per row from both encoding
+strategies, matching NimbleCSV's public output shape. The measurements below
+predate that shape change and remain as a historical baseline. See the
+[README](../README.md#nif-accelerated-encoding) for current behavior.
 
 ### Throughput
 

@@ -1,6 +1,6 @@
 # RustyCSV Architecture
 
-A purpose-built Rust NIF for ultra-fast CSV parsing in Elixir. Not a wrapper around an existing library—custom-built from the ground up for optimal BEAM integration.
+A purpose-built Rust NIF for ultra-fast CSV parsing in Elixir, designed specifically for BEAM integration.
 
 ## Key Innovations
 
@@ -23,8 +23,8 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 ### Memory Efficiency
 
-- **Sub-binary memory model** - All batch strategies use sub-binary references (5-14x less memory than pure Elixir)
-- **Streaming bounded memory** - Process 10GB+ files with ~64KB memory footprint
+- **Sub-binary memory model** - All batch strategies use sub-binary references (5-14x less memory in the published 0.3.6 benchmark)
+- **Streaming bounded memory** - Memory is bounded by the configured buffer, longest row, and rows retained by the caller
 - **mimalloc allocator** - High-performance allocator for reduced fragmentation
 - **Optional memory tracking** - Opt-in profiling with zero overhead when disabled
 
@@ -32,7 +32,7 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 - **484 ExUnit tests plus 131 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
 - **Cross-strategy validation** - All strategies produce identical output
-- **NimbleCSV compatibility** - Verified identical behavior for all API functions
+- **NimbleCSV compatibility** - The upstream semantic test suites pass against RustyCSV
 
 ## Quick Start
 
@@ -133,11 +133,11 @@ Both batch strategies (`:simd`, `:parallel`) share a single-pass SIMD structural
 ### Strategy Selection Guide
 
 ```
-File Size        Recommended Strategy
+Workload                    Recommended Strategy
 ─────────────────────────────────────────────────────────────
-< 500 MB         :simd (default)
-500 MB+          :simd or :parallel (multi-core)
-Unbounded        streaming (parse_stream)
+Most batch parsing          :simd (default)
+Very large or quote-heavy   benchmark :simd and :parallel
+Unbounded                   streaming (parse_stream)
 ```
 
 ### Memory Model Trade-offs
