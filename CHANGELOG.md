@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-13
+
+This is a NimbleCSV 1.3.0 decoding and encoding parity release. It closes the
+known drop-in compatibility gaps in parsing malformed input and in encoded
+output shape, row ordering, and streaming BOM output, as well as `options/0`.
+NimbleCSV's upstream v1.3.0 suite passes 21/21 on behavior; RustyCSV
+intentionally redacts raw CSV content from parse-error messages.
+
+### Breaking changes
+
+- **Strict parsing by default** - malformed quoting now raises `RustyCSV.ParseError`
+  across batch, parallel, multi-byte, custom-newline, and streaming parsers. Pass
+  `strict: false` to retain the pre-0.4 lenient behavior for dirty exports.
+- **NimbleCSV-compatible dump shape** - `dump_to_iodata/2` now returns one
+  top-level iodata list per row, and each `dump_to_stream/1` row is
+  list-shaped iodata. Use `IO.iodata_to_binary/1` when a flat binary is required.
+
+### Fixed
+
+- Reject batch inputs larger than `u32::MAX` at the Rust scanner boundary instead
+  of relying on callers to prevent position truncation.
+- Detect unexpected quotes, data after closing quotes, and unterminated quoted
+  fields consistently across SIMD, general, parallel, and streaming paths.
+- Preserve the first absolute violation position across parallel row parsing and
+  streaming buffer compaction without including CSV field contents in errors.
+- Preserve the original option values in `options/0` and emit the configured BOM
+  from `dump_to_stream/1`.
+
+### Maintenance
+
+- Enabled Rust unsafe-code linting and documented the feature-gated allocator
+  safety contracts.
+- Removed the unused incremental structural scanner from the public Rust surface.
+- Updated Rustler to 0.38.0 while retaining NIF 2.15-2.17 targets for OTP
+  compatibility, and refreshed compatible Hex and Cargo dependencies.
+
 ## [0.3.11] - 2026-05-22
 
 ### Fixed

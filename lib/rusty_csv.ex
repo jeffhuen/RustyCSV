@@ -74,38 +74,23 @@ defmodule RustyCSV do
   Convert rows back to CSV format:
 
       CSV.dump_to_iodata([["name", "age"], ["john", "27"]])
-      #=> "name,age\njohn,27\n"
+      #=> [["name,age\n"], ["john,27\n"]]
 
-  Encoding uses SIMD-accelerated Rust NIFs. The default encoder writes CSV bytes
-  into a single flat binary. The parallel encoder and BOM-enabled parsers return
-  iodata, which can be flattened with `IO.iodata_to_binary/1` when a binary is
-  required. The NIF handles four modes: plain UTF-8, UTF-8 with formula escaping,
-  non-UTF-8 encoding, and both combined.
-
-  > **Difference from NimbleCSV:** NimbleCSV's `dump_to_iodata/1` returns an
-  > iodata list (a nested list of small binaries) that callers typically flatten
-  > back into a single binary via `IO.iodata_to_binary/1` before writing to a
-  > file, sending as a download, or passing to an API. RustyCSV's default encoder
-  > skips that roundtrip and returns the final binary directly, ready for use with
-  > `IO.binwrite/2`, `Conn.send_resp/3`, `:gen_tcp.send/2`, `File.write/2`,
-  > etc. The output bytes are identical.
-  >
-  > Code that pattern-matches on the return value expecting a list will need
-  > adjustment. This is a deliberate trade-off: building an iodata list across
-  > the NIF boundary requires allocating one Erlang term per field, separator,
-  > and newline, which is 18–63% slower and uses 3–6x more NIF memory than
-  > returning the bytes directly.
+  Encoding uses SIMD-accelerated Rust NIFs and returns one top-level iodata list
+  per row, matching NimbleCSV's public return shape. Use
+  `IO.iodata_to_binary/1` when a flat binary is required. The NIF handles plain
+  UTF-8, formula escaping, non-UTF-8 encoding, and combinations of those modes.
 
   ### Encoding Strategies
 
   `dump_to_iodata/2` accepts a `:strategy` option:
 
     * *default* (no option) — Single-threaded SIMD-accelerated encoder.
-      Writes all CSV bytes into a single flat binary. Best for most workloads.
+      Returns one binary per row. Best for most workloads.
 
     * `:parallel` — Multi-threaded encoding via rayon. Copies all field data
-      into Rust-owned memory, splits rows into chunks, and encodes each chunk
-      on a separate thread. Returns a short list of large binaries. Best for
+      into Rust-owned memory and encodes rows across worker threads. Returns one
+      binary per row. Best for
       quoting-heavy data (user-generated content with embedded commas/quotes/newlines).
 
   Example:
@@ -141,10 +126,10 @@ defmodule RustyCSV do
     * `parse_string/2` - Parse CSV string to list of rows
     * `parse_stream/2` - Lazily parse a stream
     * `parse_enumerable/2` - Parse any enumerable
-    * `dump_to_iodata/2` - Convert rows to iodata (the default encoder returns a flat binary — see "Encoding" section)
+    * `dump_to_iodata/2` - Convert rows to list-shaped iodata
     * `dump_to_stream/1` - Lazily convert rows to iodata stream
     * `to_line_stream/1` - Convert arbitrary chunks to lines
-    * `options/0` - Return module configuration
+    * `options/0` - Return the original definition options
 
   RustyCSV extends NimbleCSV with additional options:
 
@@ -357,6 +342,8 @@ defmodule RustyCSV do
   ## Common Options
 
     * `:skip_headers` - When `true`, skips the first row. Defaults to `true`.
+    * `:strict` - Raise `RustyCSV.ParseError` for malformed quoting. Defaults to `true`.
+      Pass `false` to retain RustyCSV's pre-0.4 lenient parsing.
     * `:strategy` - The parsing strategy to use. One of:
       * `:simd` - SIMD structural boundary scan (default)
       * `:basic` - Alias for `:simd`
@@ -392,6 +379,7 @@ defmodule RustyCSV do
   """
   @type parse_options :: [
           skip_headers: boolean(),
+          strict: boolean(),
           strategy: strategy(),
           headers: boolean() | [atom() | String.t()],
           chunk_size: pos_integer(),
@@ -485,6 +473,22 @@ defmodule RustyCSV do
 
     @impl true
     def message(%{message: message}), do: message
+
+    @doc false
+    def unwrap!({:error, {:malformed_csv, category, position}}) do
+      raise __MODULE__, message: malformed_message(category, position)
+    end
+
+    def unwrap!(result), do: result
+
+    defp malformed_message(:unexpected_quote, position),
+      do: "unexpected escape character at byte #{position}"
+
+    defp malformed_message(:trailing_garbage, position),
+      do: "unexpected data after a closing escape at byte #{position}"
+
+    defp malformed_message(:unterminated_quote, position),
+      do: "expected a closing escape before end of input at byte #{position}"
   end
 
   # ==========================================================================
@@ -492,7 +496,7 @@ defmodule RustyCSV do
   # ==========================================================================
 
   @doc """
-  Returns the options used to define this CSV module.
+  Returns the original options used to define this CSV module.
   """
   @callback options() :: keyword()
 
@@ -529,11 +533,8 @@ defmodule RustyCSV do
   @doc """
   Converts rows to iodata in CSV format.
 
-  Returns iodata. For the default encoder without a BOM this is a single flat
-  binary. `:parallel` encoding and BOM-enabled modules may return list-shaped
-  iodata. Use `IO.iodata_to_binary/1` when a binary is required. See
-  "Encoding (Dumping)" in the module doc for details on how this differs from
-  NimbleCSV.
+  Returns list-shaped iodata. Use `IO.iodata_to_binary/1` when a binary is
+  required.
 
   ## Options
 
@@ -709,18 +710,7 @@ defmodule RustyCSV do
     validate_encoding!(encoding)
     bom = :unicode.encoding_to_bom(encoding)
 
-    stored_options = [
-      separator: separator_list,
-      escape: escape,
-      line_separator: line_separator,
-      newlines: newlines,
-      trim_bom: trim_bom,
-      dump_bom: dump_bom,
-      reserved: reserved,
-      escape_formula: escape_formula,
-      encoding: encoding,
-      strategy: default_strategy
-    ]
+    stored_options = options
 
     %{
       separator: first_separator,
@@ -865,7 +855,7 @@ defmodule RustyCSV do
   defp quoted_config_function(config) do
     quote do
       @doc """
-      Returns the options used to define this CSV module.
+      Returns the original options used to define this CSV module.
       """
       @impl RustyCSV
       @spec options() :: keyword()
@@ -907,6 +897,8 @@ defmodule RustyCSV do
       ## Options
 
         * `:skip_headers` - When `true`, skips the first row. Defaults to `true`.
+        * `:strict` - Raise `RustyCSV.ParseError` for malformed quoting. Defaults
+          to `true`. Pass `false` for the pre-0.4 lenient behavior.
         * `:strategy` - The parsing strategy. Defaults to `#{inspect(@default_strategy)}`.
         * `:headers` - Controls header handling. Defaults to `false`.
           * `false` - Return rows as lists (default behavior)
@@ -923,17 +915,24 @@ defmodule RustyCSV do
       def parse_string(string, opts) when is_binary(string) and is_list(opts) do
         headers = Keyword.get(opts, :headers, false)
         strategy = Keyword.get(opts, :strategy, @default_strategy)
+        strict = Keyword.get(opts, :strict, true)
+
+        unless is_boolean(strict) do
+          raise ArgumentError,
+                "invalid :strict option, expected a boolean, got: #{inspect(strict)}"
+        end
+
         string = string |> maybe_trim_bom() |> maybe_to_utf8()
-        do_parse_string_with_headers(string, strategy, headers, opts)
+        do_parse_string_with_headers(string, strategy, headers, opts, strict)
       end
     end
   end
 
   defp quoted_parse_string_headers_clauses do
     quote do
-      defp do_parse_string_with_headers(string, strategy, false, opts) do
+      defp do_parse_string_with_headers(string, strategy, false, opts, strict) do
         skip_headers = Keyword.get(opts, :skip_headers, true)
-        rows = do_parse_string(string, strategy)
+        rows = string |> do_parse_string(strategy, strict) |> RustyCSV.ParseError.unwrap!()
 
         case {skip_headers, rows} do
           {true, [_ | tail]} -> tail
@@ -941,17 +940,22 @@ defmodule RustyCSV do
         end
       end
 
-      defp do_parse_string_with_headers(string, strategy, true, _opts) do
-        do_parse_to_maps(string, strategy, true, true)
+      defp do_parse_string_with_headers(string, strategy, true, _opts, strict) do
+        string
+        |> do_parse_to_maps(strategy, true, true, strict)
+        |> RustyCSV.ParseError.unwrap!()
       end
 
-      defp do_parse_string_with_headers(string, strategy, header_list, opts)
+      defp do_parse_string_with_headers(string, strategy, header_list, opts, strict)
            when is_list(header_list) do
         skip_headers = Keyword.get(opts, :skip_headers, true)
-        do_parse_to_maps(string, strategy, header_list, skip_headers)
+
+        string
+        |> do_parse_to_maps(strategy, header_list, skip_headers, strict)
+        |> RustyCSV.ParseError.unwrap!()
       end
 
-      defp do_parse_string_with_headers(_string, _strategy, other, _opts) do
+      defp do_parse_string_with_headers(_string, _strategy, other, _opts, _strict) do
         raise ArgumentError,
               "invalid :headers option, expected false, true, or a list of keys, got: #{inspect(other)}"
       end
@@ -960,18 +964,19 @@ defmodule RustyCSV do
 
   defp quoted_parse_to_maps_clauses do
     quote do
-      defp do_parse_to_maps(string, :parallel, header_mode, skip_first) do
+      defp do_parse_to_maps(string, :parallel, header_mode, skip_first, strict) do
         RustyCSV.Native.parse_to_maps_parallel(
           string,
           @separator_binaries,
           @escape_binary,
           @newlines_nif,
           header_mode,
-          skip_first
+          skip_first,
+          strict
         )
       end
 
-      defp do_parse_to_maps(string, strategy, header_mode, skip_first) do
+      defp do_parse_to_maps(string, strategy, header_mode, skip_first, strict) do
         RustyCSV.Native.parse_to_maps(
           string,
           @separator_binaries,
@@ -979,7 +984,8 @@ defmodule RustyCSV do
           @newlines_nif,
           strategy,
           header_mode,
-          skip_first
+          skip_first,
+          strict
         )
       end
     end
@@ -1022,8 +1028,8 @@ defmodule RustyCSV do
           {:error, converted, rest} ->
             raise RustyCSV.ParseError,
               message:
-                "Invalid #{inspect(unquote(Macro.escape(encoding)))} sequence at byte #{byte_size(converted)}: " <>
-                  "#{inspect(binary_part(rest, 0, min(byte_size(rest), 10)))}"
+                "Invalid #{inspect(unquote(Macro.escape(encoding)))} sequence after " <>
+                  "#{byte_size(converted)} converted bytes (#{byte_size(rest)} bytes rejected)"
         end
       end
     end
@@ -1031,48 +1037,53 @@ defmodule RustyCSV do
 
   defp quoted_do_parse_string_clauses do
     quote do
-      defp do_parse_string(string, :basic) do
+      defp do_parse_string(string, :basic, strict) do
         RustyCSV.Native.parse_string_with_config(
           string,
           @separator_binaries,
           @escape_binary,
-          @newlines_nif
+          @newlines_nif,
+          strict
         )
       end
 
-      defp do_parse_string(string, :simd) do
+      defp do_parse_string(string, :simd, strict) do
         RustyCSV.Native.parse_string_fast_with_config(
           string,
           @separator_binaries,
           @escape_binary,
-          @newlines_nif
+          @newlines_nif,
+          strict
         )
       end
 
-      defp do_parse_string(string, :indexed) do
+      defp do_parse_string(string, :indexed, strict) do
         RustyCSV.Native.parse_string_indexed_with_config(
           string,
           @separator_binaries,
           @escape_binary,
-          @newlines_nif
+          @newlines_nif,
+          strict
         )
       end
 
-      defp do_parse_string(string, :parallel) do
+      defp do_parse_string(string, :parallel, strict) do
         RustyCSV.Native.parse_string_parallel_with_config(
           string,
           @separator_binaries,
           @escape_binary,
-          @newlines_nif
+          @newlines_nif,
+          strict
         )
       end
 
-      defp do_parse_string(string, :zero_copy) do
+      defp do_parse_string(string, :zero_copy, strict) do
         RustyCSV.Native.parse_string_zero_copy_with_config(
           string,
           @separator_binaries,
           @escape_binary,
-          @newlines_nif
+          @newlines_nif,
+          strict
         )
       end
     end
@@ -1094,6 +1105,8 @@ defmodule RustyCSV do
       ## Options
 
         * `:skip_headers` - When `true`, skips the first row. Defaults to `true`.
+        * `:strict` - Raise `RustyCSV.ParseError` for malformed quoting. Defaults
+          to `true`. Pass `false` for the pre-0.4 lenient behavior.
         * `:headers` - Controls header handling. Defaults to `false`.
           * `false` - Return rows as lists (default behavior)
           * `true` - Use first row as string keys, return maps.
@@ -1114,6 +1127,12 @@ defmodule RustyCSV do
         headers = Keyword.get(opts, :headers, false)
         chunk_size = Keyword.get(opts, :chunk_size, 64 * 1024)
         batch_size = Keyword.get(opts, :batch_size, 1000)
+        strict = Keyword.get(opts, :strict, true)
+
+        unless is_boolean(strict) do
+          raise ArgumentError,
+                "invalid :strict option, expected a boolean, got: #{inspect(strict)}"
+        end
 
         stream_opts = [
           chunk_size: chunk_size,
@@ -1123,7 +1142,8 @@ defmodule RustyCSV do
           newlines: @newlines_nif,
           encoding: @encoding,
           bom: @bom,
-          trim_bom: @trim_bom
+          trim_bom: @trim_bom,
+          strict: strict
         ]
 
         stream_opts =
@@ -1272,9 +1292,7 @@ defmodule RustyCSV do
       @doc """
       Converts an enumerable of rows to iodata in CSV format.
 
-      Returns iodata. For the default encoder without a BOM this is a single
-      flat binary. `:parallel` encoding and BOM-enabled modules may return
-      list-shaped iodata.
+      Returns one top-level iodata list per row, compatible with NimbleCSV.
 
       ## Options
 
@@ -1301,12 +1319,9 @@ defmodule RustyCSV do
           rows
           |> encode_rows_nif(strategy)
           |> retry_with_coerced_fields(rows, strategy)
+          |> Enum.map(&List.wrap/1)
 
-        if @dump_bom do
-          [@bom, result]
-        else
-          result
-        end
+        if @dump_bom, do: [@bom | result], else: result
       end
     end
   end
@@ -1370,7 +1385,8 @@ defmodule RustyCSV do
       @impl RustyCSV
       @spec dump_to_stream(Enumerable.t()) :: Enumerable.t()
       def dump_to_stream(enumerable) do
-        Stream.map(enumerable, &encode_single_row_nif/1)
+        stream = Stream.map(enumerable, &(encode_single_row_nif(&1) |> List.wrap()))
+        if @dump_bom, do: Stream.concat([@bom], stream), else: stream
       end
 
       defp encode_single_row_nif(row) do

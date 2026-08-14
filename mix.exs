@@ -1,7 +1,7 @@
 defmodule RustyCSV.MixProject do
   use Mix.Project
 
-  @version "0.3.11"
+  @version "0.4.0"
   @source_url "https://github.com/jeffhuen/rustycsv"
 
   def project do
@@ -25,8 +25,8 @@ defmodule RustyCSV.MixProject do
 
   defp description do
     """
-    Ultra-fast CSV parsing for Elixir. A purpose-built Rust NIF with SIMD acceleration,
-    parallel parsing, and bounded-memory streaming. Drop-in NimbleCSV replacement.
+    Ultra-fast CSV parsing and encoding for Elixir. Purpose-built Rust NIFs with SIMD,
+    parallel processing, and bounded-memory streaming. Drop-in NimbleCSV replacement.
     """
   end
 
@@ -92,7 +92,7 @@ defmodule RustyCSV.MixProject do
 
   defp deps do
     [
-      {:rustler, "~> 0.37.3", optional: true},
+      {:rustler, "~> 0.38.0", optional: true},
       {:rustler_precompiled, "~> 0.9"},
       {:nimble_csv, "~> 1.2", only: [:dev, :test]},
       {:stream_data, "~> 1.3", only: [:dev, :test]},

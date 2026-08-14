@@ -2,11 +2,11 @@ defmodule NimbleCSVCompatTest do
   @moduledoc """
   Tests adapted from NimbleCSV to verify RustyCSV is a drop-in replacement.
 
-  Source: https://github.com/dashbitco/nimble_csv/blob/master/test/nimble_csv_test.exs
+  Sources:
+  - https://github.com/dashbitco/nimble_csv/blob/v1.3.0/test/nimble_csv_test.exs
+  - https://github.com/dashbitco/nimble_csv/blob/master/test/nimble_csv_test.exs
 
-  Key differences from NimbleCSV:
-  - RustyCSV uses \\n line separator for dumping (NimbleCSV.RFC4180 uses \\r\\n)
-  - RustyCSV adds :strategy option for parsing approach selection
+  RustyCSV adds strategy selection and redacts raw CSV content from parse errors.
   """
   use ExUnit.Case
 
@@ -193,10 +193,28 @@ defmodule NimbleCSVCompatTest do
   end
 
   describe "dump_to_iodata/1" do
+    test "empty dumping returns an empty list" do
+      assert CSV.dump_to_iodata([]) == []
+    end
+
     test "basic dumping" do
       # RFC 4180 specifies CRLF line endings
-      assert IO.iodata_to_binary(CSV.dump_to_iodata([["name", "age"], ["john", 27]])) ==
+      result = CSV.dump_to_iodata([["name", "age"], ["john", 27]])
+
+      assert [[first_row], [second_row]] = result
+      assert is_binary(first_row)
+      assert is_binary(second_row)
+
+      assert IO.iodata_to_binary(result) ==
                "name,age\r\njohn,27\r\n"
+
+      parallel =
+        CSV.dump_to_iodata([["name", "age"], ["john", 27]], strategy: :parallel)
+
+      assert [[first_parallel_row], [second_parallel_row]] = parallel
+      assert is_binary(first_parallel_row)
+      assert is_binary(second_parallel_row)
+      assert IO.iodata_to_binary(parallel) == IO.iodata_to_binary(result)
     end
 
     test "dumping with newlines in fields" do
@@ -217,9 +235,11 @@ defmodule NimbleCSVCompatTest do
 
   describe "dump_to_stream/1" do
     test "basic streaming dump" do
-      assert IO.iodata_to_binary(
-               Enum.to_list(CSV.dump_to_stream([["name", "age"], ["john", 27]]))
-             ) ==
+      result = Enum.to_list(CSV.dump_to_stream([["name", "age"], ["john", 27]]))
+
+      assert Enum.all?(result, &is_list/1)
+
+      assert IO.iodata_to_binary(result) ==
                "name,age\r\njohn,27\r\n"
     end
 

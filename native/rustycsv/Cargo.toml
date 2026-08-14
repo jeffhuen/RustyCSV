@@ -1,6 +1,6 @@
 [package]
 name = "rustycsv"
-version = "0.3.11"
+version = "0.4.0"
 authors = ["Jeff Huen"]
 edition = "2021"
 
@@ -10,7 +10,7 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-rustler = "0.37.4"
+rustler = "0.38.0"
 rayon = "1.12"      # Data parallelism for parallel parsing
 thiserror = "2.0"   # Idiomatic error types for library code
 mimalloc = { version = "0.1.52", default-features = false, optional = true }
@@ -19,7 +19,7 @@ mimalloc = { version = "0.1.52", default-features = false, optional = true }
 # Statistical benchmark harness. Rule 8 requires a recorded baseline before any
 # change justified by speed; criterion's --save-baseline/--baseline gives that.
 # Lean feature set: no plotting, no rayon in the harness itself.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "scanner"

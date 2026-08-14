@@ -139,8 +139,12 @@ defmodule RustyCSV.Native do
   @typedoc "Multiple parsed rows"
   @type rows :: [row()]
 
-  @typedoc "Batch parse error"
-  @type parse_error :: {:error, :input_too_large}
+  @typedoc "Native parse error"
+  @type parse_error ::
+          {:error, :input_too_large}
+          | {:error,
+             {:malformed_csv, :unexpected_quote | :trailing_garbage | :unterminated_quote,
+              non_neg_integer()}}
 
   @typedoc "Native encoding retry signal for wrappers that accept non-binary fields"
   @type encode_error :: {:error, :non_binary_field}
@@ -221,7 +225,13 @@ defmodule RustyCSV.Native do
   """
   @spec parse_string_with_config(binary(), separator(), escape(), term()) ::
           rows() | parse_error()
-  def parse_string_with_config(_csv, _separator, _escape, _newlines),
+  def parse_string_with_config(csv, separator, escape, newlines),
+    do: parse_string_with_config(csv, separator, escape, newlines, true)
+
+  @doc false
+  @spec parse_string_with_config(binary(), separator(), escape(), term(), boolean()) ::
+          rows() | parse_error()
+  def parse_string_with_config(_csv, _separator, _escape, _newlines, _strict),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -258,7 +268,13 @@ defmodule RustyCSV.Native do
   """
   @spec parse_string_fast_with_config(binary(), separator(), escape(), term()) ::
           rows() | parse_error()
-  def parse_string_fast_with_config(_csv, _separator, _escape, _newlines),
+  def parse_string_fast_with_config(csv, separator, escape, newlines),
+    do: parse_string_fast_with_config(csv, separator, escape, newlines, true)
+
+  @doc false
+  @spec parse_string_fast_with_config(binary(), separator(), escape(), term(), boolean()) ::
+          rows() | parse_error()
+  def parse_string_fast_with_config(_csv, _separator, _escape, _newlines, _strict),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -295,7 +311,13 @@ defmodule RustyCSV.Native do
   """
   @spec parse_string_indexed_with_config(binary(), separator(), escape(), term()) ::
           rows() | parse_error()
-  def parse_string_indexed_with_config(_csv, _separator, _escape, _newlines),
+  def parse_string_indexed_with_config(csv, separator, escape, newlines),
+    do: parse_string_indexed_with_config(csv, separator, escape, newlines, true)
+
+  @doc false
+  @spec parse_string_indexed_with_config(binary(), separator(), escape(), term(), boolean()) ::
+          rows() | parse_error()
+  def parse_string_indexed_with_config(_csv, _separator, _escape, _newlines, _strict),
     do: :erlang.nif_error(:nif_not_loaded)
 
   # ==========================================================================
@@ -346,7 +368,12 @@ defmodule RustyCSV.Native do
 
   """
   @spec streaming_new_with_config(separator(), escape(), term()) :: parser_ref()
-  def streaming_new_with_config(_separator, _escape, _newlines),
+  def streaming_new_with_config(separator, escape, newlines),
+    do: streaming_new_with_config(separator, escape, newlines, true)
+
+  @doc false
+  @spec streaming_new_with_config(separator(), escape(), term(), boolean()) :: parser_ref()
+  def streaming_new_with_config(_separator, _escape, _newlines, _strict),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -368,7 +395,8 @@ defmodule RustyCSV.Native do
       {available, buffer_size} = RustyCSV.Native.streaming_feed(parser, chunk)
 
   """
-  @spec streaming_feed(parser_ref(), binary()) :: {non_neg_integer(), non_neg_integer()}
+  @spec streaming_feed(parser_ref(), binary()) ::
+          {non_neg_integer(), non_neg_integer()} | parse_error()
   def streaming_feed(_parser, _chunk), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -381,7 +409,7 @@ defmodule RustyCSV.Native do
       rows = RustyCSV.Native.streaming_next_rows(parser, 100)
 
   """
-  @spec streaming_next_rows(parser_ref(), non_neg_integer()) :: rows()
+  @spec streaming_next_rows(parser_ref(), non_neg_integer()) :: rows() | parse_error()
   def streaming_next_rows(_parser, _max), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -395,7 +423,7 @@ defmodule RustyCSV.Native do
       final_rows = RustyCSV.Native.streaming_finalize(parser)
 
   """
-  @spec streaming_finalize(parser_ref()) :: rows()
+  @spec streaming_finalize(parser_ref()) :: rows() | parse_error()
   def streaming_finalize(_parser), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -460,7 +488,13 @@ defmodule RustyCSV.Native do
   """
   @spec parse_string_parallel_with_config(binary(), separator(), escape(), term()) ::
           rows() | parse_error()
-  def parse_string_parallel_with_config(_csv, _separator, _escape, _newlines),
+  def parse_string_parallel_with_config(csv, separator, escape, newlines),
+    do: parse_string_parallel_with_config(csv, separator, escape, newlines, true)
+
+  @doc false
+  @spec parse_string_parallel_with_config(binary(), separator(), escape(), term(), boolean()) ::
+          rows() | parse_error()
+  def parse_string_parallel_with_config(_csv, _separator, _escape, _newlines, _strict),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -497,7 +531,13 @@ defmodule RustyCSV.Native do
   """
   @spec parse_string_zero_copy_with_config(binary(), separator(), escape(), term()) ::
           rows() | parse_error()
-  def parse_string_zero_copy_with_config(_csv, _separator, _escape, _newlines),
+  def parse_string_zero_copy_with_config(csv, separator, escape, newlines),
+    do: parse_string_zero_copy_with_config(csv, separator, escape, newlines, true)
+
+  @doc false
+  @spec parse_string_zero_copy_with_config(binary(), separator(), escape(), term(), boolean()) ::
+          rows() | parse_error()
+  def parse_string_zero_copy_with_config(_csv, _separator, _escape, _newlines, _strict),
     do: :erlang.nif_error(:nif_not_loaded)
 
   # ==========================================================================
@@ -520,8 +560,31 @@ defmodule RustyCSV.Native do
   """
   @spec parse_to_maps(binary(), separator(), escape(), term(), atom(), atom() | list(), boolean()) ::
           [map()] | parse_error()
-  def parse_to_maps(_input, _separator, _escape, _newlines, _strategy, _header_mode, _skip_first),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def parse_to_maps(input, separator, escape, newlines, strategy, header_mode, skip_first),
+    do: parse_to_maps(input, separator, escape, newlines, strategy, header_mode, skip_first, true)
+
+  @doc false
+  @spec parse_to_maps(
+          binary(),
+          separator(),
+          escape(),
+          term(),
+          atom(),
+          atom() | list(),
+          boolean(),
+          boolean()
+        ) :: [map()] | parse_error()
+  def parse_to_maps(
+        _input,
+        _separator,
+        _escape,
+        _newlines,
+        _strategy,
+        _header_mode,
+        _skip_first,
+        _strict
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Parse CSV in parallel and return list of maps.
@@ -546,8 +609,38 @@ defmodule RustyCSV.Native do
           boolean()
         ) ::
           [map()] | parse_error()
-  def parse_to_maps_parallel(_input, _separator, _escape, _newlines, _header_mode, _skip_first),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def parse_to_maps_parallel(input, separator, escape, newlines, header_mode, skip_first),
+    do:
+      parse_to_maps_parallel(
+        input,
+        separator,
+        escape,
+        newlines,
+        header_mode,
+        skip_first,
+        true
+      )
+
+  @doc false
+  @spec parse_to_maps_parallel(
+          binary(),
+          separator(),
+          escape(),
+          term(),
+          atom() | list(),
+          boolean(),
+          boolean()
+        ) :: [map()] | parse_error()
+  def parse_to_maps_parallel(
+        _input,
+        _separator,
+        _escape,
+        _newlines,
+        _header_mode,
+        _skip_first,
+        _strict
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   # ==========================================================================
   # Encoding NIF
@@ -562,7 +655,7 @@ defmodule RustyCSV.Native do
   multi-byte separator/escape sequences.
 
   Accepts a list of rows, where each row is a list of binary fields.
-  Returns a flat binary. If any field is not a binary, returns
+  Returns one binary per row as iodata. If any field is not a binary, returns
   `{:error, :non_binary_field}` so higher-level wrappers can coerce fields
   without masking unrelated `ArgumentError` failures.
 
@@ -575,8 +668,10 @@ defmodule RustyCSV.Native do
 
   ## Examples
 
-      iex> RustyCSV.Native.encode_string([["a", "b"], ["1", "2"]], 44, 34, :default)
-      "a,b\\n1,2\\n"
+      iex> RustyCSV.Native.encode_string(
+      ...>   [["a", "b"], ["1", "2"]], [","], <<34>>, "\\n", nil, :utf8, []
+      ...> )
+      ["a,b\\n", "1,2\\n"]
 
   """
   @spec encode_string(
@@ -595,7 +690,7 @@ defmodule RustyCSV.Native do
   @doc """
   Encode rows to CSV in parallel using rayon, returning iodata (list of binaries).
 
-  Uses multiple threads to encode chunks of rows simultaneously. Copies all
+  Uses multiple threads to encode rows simultaneously. Copies all
   field data into Rust-owned memory before dispatching to worker threads.
   If any field is not a binary, returns `{:error, :non_binary_field}` so
   higher-level wrappers can coerce fields without masking unrelated
@@ -606,10 +701,10 @@ defmodule RustyCSV.Native do
   The per-field quoting work parallelizes well and outweighs the copy overhead.
 
   For typical/clean data where most fields pass through unquoted, prefer
-  `encode_string/4` which avoids the copy via zero-copy term references.
+  `encode_string/7` which avoids the input copy via term references.
 
   Only supports single-byte separator/escape. Raises `ArgumentError` for
-  multi-byte configurations — use `encode_string/4` instead.
+  multi-byte configurations — use `encode_string/7` instead.
 
   ## Parameters
 
@@ -620,9 +715,10 @@ defmodule RustyCSV.Native do
 
   ## Examples
 
-      iex> RustyCSV.Native.encode_string_parallel([["a", "b"], ["1", "2"]], [","], "\\"", "\\r\\n")
-      ...> |> IO.iodata_to_binary()
-      "a,b\\r\\n1,2\\r\\n"
+      iex> RustyCSV.Native.encode_string_parallel(
+      ...>   [["a", "b"], ["1", "2"]], [","], <<34>>, "\\r\\n", nil, :utf8, []
+      ...> )
+      ["a,b\\r\\n", "1,2\\r\\n"]
 
   """
   @spec encode_string_parallel(

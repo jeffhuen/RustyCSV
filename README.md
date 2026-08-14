@@ -3,7 +3,7 @@
 **Ultra-fast CSV parsing and encoding for Elixir.** A purpose-built Rust NIF with SIMD acceleration, parallel parsing, and bounded-memory streaming. Drop-in replacement for NimbleCSV.
 
 [![Hex.pm](https://img.shields.io/hexpm/v/rusty_csv.svg)](https://hex.pm/packages/rusty_csv)
-[![Tests](https://img.shields.io/badge/tests-464%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-484%20ExUnit%20%2B%20131%20Rust-brightgreen.svg)]()
 [![RFC 4180](https://img.shields.io/badge/RFC%204180-compliant-blue.svg)]()
 
 ## Why RustyCSV?
@@ -37,11 +37,11 @@
 | **Multi-separator support** | ✅ `[",", ";"]`, `"::"` | ✅ |
 | **Encoding support** | ✅ UTF-8, UTF-16, Latin-1, UTF-32 | ✅ |
 | **Memory model** | Sub-binary references | Sub-binary references |
-| **NIF encoding** | ✅ Returns iodata; default path is a flat binary (same bytes, ready to use) | Returns iodata list (typically flattened by caller) |
+| **NIF encoding** | ✅ List-shaped iodata | List-shaped iodata |
 | **High-performance allocator** | ✅ mimalloc | System |
 | **Drop-in replacement** | ✅ Same API | - |
 | **Headers-to-maps** | ✅ `headers: true` or explicit keys | ❌ |
-| **RFC 4180 compliant** | ✅ 464 tests | ✅ |
+| **RFC 4180 compliant** | ✅ 484 ExUnit + 131 Rust tests | ✅ |
 | **Benchmark (7MB CSV)** | ~20ms | ~215ms |
 
 ## Purpose-Built for Elixir
@@ -51,7 +51,7 @@ RustyCSV isn't a wrapper around an existing Rust CSV library. It's **custom-buil
 - **Boundary-based sub-binary fields** - SIMD scanner finds field boundaries, then creates BEAM sub-binary references directly (zero-copy for clean fields, copy only when unescaping `""` → `"`)
 - **Dirty scheduler aware** - long-running parallel parses run on dirty CPU schedulers, never blocking your BEAM schedulers
 - **ResourceArc-based streaming** - stateful parser properly integrated with BEAM's garbage collector
-- **Direct term building** - parsing results go straight to BEAM terms; default encoding writes directly to a flat binary
+- **Direct term building** - parsing results go straight to BEAM terms; encoding builds one binary per row without per-field BEAM terms
 
 ### Parsing Strategies
 
@@ -62,6 +62,15 @@ Choose the right tool for the job:
 | `:simd` | **Default.** Fastest for most files | Single-pass SIMD structural scanner via `std::simd` |
 | `:parallel` | Files 500MB+ with complex quoting | Multi-threaded row parsing via `rayon` |
 | `:streaming` | Unbounded/huge files | Bounded-memory chunk processing |
+
+Parsing is strict by default, matching NimbleCSV's malformed-quote behavior.
+Existing RustyCSV applications that intentionally accept dirty exports can opt
+back into the pre-0.4 behavior:
+
+```elixir
+CSV.parse_string(csv, strict: false)
+CSV.parse_stream(chunks, strict: false)
+```
 
 **Memory Model:**
 
@@ -84,7 +93,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.3.11"}]
+  [{:rusty_csv, "~> 0.4.0"}]
 end
 ```
 
@@ -142,12 +151,10 @@ All NimbleCSV functions are supported:
 | `parse_string/2` | Parse CSV string to list of rows (or maps with `headers:`) |
 | `parse_stream/2` | Lazily parse a stream (or maps with `headers:`) |
 | `parse_enumerable/2` | Parse any enumerable |
-| `dump_to_iodata/2`* | Convert rows to iodata; default path returns a flat binary (`strategy: :parallel` for quoting-heavy data) |
-| `dump_to_stream/1`* | Lazily convert rows to stream of binaries (one per row) |
+| `dump_to_iodata/2` | Convert rows to list-shaped iodata (`strategy: :parallel` for quoting-heavy data) |
+| `dump_to_stream/1` | Lazily convert rows to a stream of list-shaped row iodata |
 | `to_line_stream/1` | Convert arbitrary chunks to lines |
-| `options/0` | Return module configuration |
-
-\* NimbleCSV returns iodata lists; RustyCSV's default encoder returns a flat binary (same bytes, no flattening needed). Parallel encoding and BOM-enabled modules may return list-shaped iodata.
+| `options/0` | Return the original definition options |
 
 ## Benchmarks
 
@@ -327,7 +334,7 @@ RustyCSV is **fully RFC 4180 compliant** and validated against industry-standard
 | Custom newlines | 18 | ✅ All pass |
 | Streaming safety | 12 | ✅ All pass |
 | Concurrent access | 7 | ✅ All pass |
-| **Total** | **464** | ✅ |
+| **ExUnit suite total** | **484** | ✅ |
 
 See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for full compliance details.
 
@@ -375,9 +382,10 @@ All batch strategies share a single-pass SIMD structural scanner that finds fiel
 
 ## NIF-Accelerated Encoding
 
-RustyCSV's default `dump_to_iodata` path returns a single flat binary rather than an iodata list. The output bytes are identical to NimbleCSV — the flat binary is ready for use directly with `IO.binwrite/2`, `File.write/2`, or `Conn.send_resp/3` without any flattening step. Parallel encoding and BOM-enabled modules may return list-shaped iodata; use `IO.iodata_to_binary/1` when a binary is required.
-
-> **Note:** NimbleCSV returns an iodata list (nested small binaries) that callers typically flatten back into a binary. RustyCSV's default encoder skips that roundtrip. Code that pattern-matches on `dump_to_iodata` expecting a list will need adjustment — callers should treat the return value as `t:iodata/0`.
+RustyCSV returns one top-level iodata list per row from `dump_to_iodata/2`
+and list-shaped row iodata from `dump_to_stream/1`, matching NimbleCSV's public
+shape. Each row is one contiguous binary, avoiding one BEAM term per field. Use
+`IO.iodata_to_binary/1` when a flat binary is required.
 
 See [docs/BENCHMARK.md](docs/BENCHMARK.md#encoding-benchmark-results) for encoding throughput and memory numbers.
 
@@ -386,21 +394,21 @@ See [docs/BENCHMARK.md](docs/BENCHMARK.md#encoding-benchmark-results) for encodi
 `dump_to_iodata/2` accepts a `:strategy` option:
 
 ```elixir
-# Default: single-threaded flat binary encoder.
-# SIMD scan for quoting, writes directly to output buffer.
+# Default: single-threaded encoder returning list-shaped iodata.
+# SIMD scan for quoting, writes directly to a reusable row buffer.
 # Best for most workloads.
 CSV.dump_to_iodata(rows)
 
 # Parallel: multi-threaded encoding via rayon.
-# Copies field data into Rust-owned memory, encodes chunks on separate threads.
+# Copies field data into Rust-owned memory, encodes rows across worker threads.
 # Faster when fields frequently need quoting (commas, quotes, newlines in values).
 CSV.dump_to_iodata(rows, strategy: :parallel)
 ```
 
 | Encoding Strategy | Best For | Output |
 |-------------------|----------|--------|
-| *default* | Most data — clean fields, moderate quoting | Single flat binary |
-| `:parallel` | Quoting-heavy data (user-generated content, free-text with embedded commas/quotes/newlines) | Short list of large binaries |
+| *default* | Most data — clean fields, moderate quoting | One list-wrapped binary per row |
+| `:parallel` | Quoting-heavy data (user-generated content, free-text with embedded commas/quotes/newlines) | One list-wrapped binary per row |
 
 ### High-Throughput Concurrent Exports
 
@@ -568,7 +576,7 @@ mix deps.get
 # Compile (includes Rust NIF)
 mix compile
 
-# Run tests (464 tests)
+# Run tests (484 ExUnit tests)
 mix test
 
 # Run benchmarks

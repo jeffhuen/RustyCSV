@@ -8,7 +8,7 @@
 //! - Buffers incomplete rows until more data arrives
 //! - Returns rows in batches to reduce NIF call overhead
 
-use crate::core::{extract_field_owned_with_escape, is_separator};
+use crate::core::{extract_field_owned_with_escape, is_separator, QuoteState, Violation};
 
 /// Default maximum buffer size for streaming parsers (256 MB).
 pub const DEFAULT_MAX_BUFFER: usize = 256 * 1024 * 1024;
@@ -45,14 +45,18 @@ pub struct StreamingParser {
     partial_row_start: usize,
     /// Position where we left off scanning (resume point)
     scan_pos: usize,
-    /// Track if we're inside quotes (important for multi-chunk quoted fields)
-    in_quotes: bool,
+    /// Strict quote state carried across input chunks.
+    quote: QuoteState,
     /// Field separator characters (supports multiple separators for NimbleCSV compatibility)
     separators: Vec<u8>,
     /// Quote/escape character
     escape: u8,
     /// Maximum buffer size in bytes
     max_buffer_size: usize,
+    /// Absolute offset represented by `buffer[0]` after compaction.
+    buffer_offset: usize,
+    /// First malformed-quoting condition seen in stream order.
+    violation: Option<Violation>,
 }
 
 impl StreamingParser {
@@ -68,10 +72,12 @@ impl StreamingParser {
             complete_rows: Vec::new(),
             partial_row_start: 0,
             scan_pos: 0,
-            in_quotes: false,
+            quote: QuoteState::new(),
             separators: vec![separator],
             escape,
             max_buffer_size: DEFAULT_MAX_BUFFER,
+            buffer_offset: 0,
+            violation: None,
         }
     }
 
@@ -82,10 +88,12 @@ impl StreamingParser {
             complete_rows: Vec::new(),
             partial_row_start: 0,
             scan_pos: 0,
-            in_quotes: false,
+            quote: QuoteState::new(),
             separators: separators.to_vec(),
             escape,
             max_buffer_size: DEFAULT_MAX_BUFFER,
+            buffer_offset: 0,
+            violation: None,
         }
     }
 
@@ -116,46 +124,44 @@ impl StreamingParser {
 
         while pos < self.buffer.len() {
             let byte = self.buffer[pos];
+            let absolute_pos = self.buffer_offset + pos;
 
-            if self.in_quotes {
+            if self.quote.in_quotes() {
                 if byte == escape {
-                    if pos + 1 < self.buffer.len() && self.buffer[pos + 1] == escape {
-                        pos += 2;
-                        continue;
+                    if pos + 1 >= self.buffer.len() {
+                        break;
                     }
-                    self.in_quotes = false;
+                    let doubled = self.buffer[pos + 1] == escape;
+                    self.quote.on_escape(absolute_pos, doubled);
+                    pos += if doubled { 2 } else { 1 };
+                } else {
+                    pos += 1;
                 }
-                pos += 1;
             } else if byte == escape {
-                self.in_quotes = true;
+                self.quote.on_escape(absolute_pos, false);
+                pos += 1;
+            } else if is_separator(byte, &self.separators) {
+                self.quote.on_delimiter();
                 pos += 1;
             } else if byte == b'\n' {
                 // Found end of row
-                let row_end = pos;
-                let row = self.parse_row_owned(self.partial_row_start, row_end);
-                if !row.is_empty() {
-                    self.complete_rows.push(row);
-                }
+                self.quote.on_delimiter();
+                self.push_complete_row(self.partial_row_start, pos);
                 pos += 1;
                 self.partial_row_start = pos;
-                // Reset quote state for next row
-                self.in_quotes = false;
             } else if byte == b'\r' {
                 // Only treat \r as line ending when followed by \n (CRLF).
                 // Bare \r is data per RFC 4180 and NimbleCSV behavior.
                 if pos + 1 < self.buffer.len() {
                     if self.buffer[pos + 1] == b'\n' {
                         // CRLF: end of row
-                        let row_end = pos;
-                        let row = self.parse_row_owned(self.partial_row_start, row_end);
-                        if !row.is_empty() {
-                            self.complete_rows.push(row);
-                        }
+                        self.quote.on_delimiter();
+                        self.push_complete_row(self.partial_row_start, pos);
                         pos += 2; // skip \r\n
                         self.partial_row_start = pos;
-                        self.in_quotes = false;
                     } else {
                         // Bare \r followed by non-\n: treat as data
+                        self.quote.on_data(absolute_pos);
                         pos += 1;
                     }
                 } else {
@@ -164,7 +170,12 @@ impl StreamingParser {
                     break;
                 }
             } else {
+                self.quote.on_data(absolute_pos);
                 pos += 1;
+            }
+
+            if self.violation.is_none() {
+                self.violation = self.quote.violation();
             }
         }
 
@@ -178,33 +189,32 @@ impl StreamingParser {
     }
 
     /// Parse a row from buffer range into owned fields
-    fn parse_row_owned(&self, start: usize, end: usize) -> Vec<Vec<u8>> {
+    fn parse_row_owned(&self, start: usize, end: usize) -> (Vec<Vec<u8>>, Option<Violation>) {
         if start >= end {
-            return Vec::new();
+            return (Vec::new(), None);
         }
 
         let line = &self.buffer[start..end];
         let mut fields = Vec::new();
         let mut pos = 0;
         let mut field_start = 0;
-        let mut in_quotes = false;
+        let mut quote = QuoteState::new();
         let separators = &self.separators;
         let escape = self.escape;
 
         while pos < line.len() {
             let byte = line[pos];
 
-            if in_quotes {
+            if quote.in_quotes() {
                 if byte == escape {
-                    if pos + 1 < line.len() && line[pos + 1] == escape {
-                        pos += 2;
-                        continue;
-                    }
-                    in_quotes = false;
+                    let doubled = pos + 1 < line.len() && line[pos + 1] == escape;
+                    quote.on_escape(pos, doubled);
+                    pos += if doubled { 2 } else { 1 };
+                } else {
+                    pos += 1;
                 }
-                pos += 1;
             } else if byte == escape {
-                in_quotes = true;
+                quote.on_escape(pos, false);
                 pos += 1;
             } else if is_separator(byte, separators) {
                 fields.push(extract_field_owned_with_escape(
@@ -215,7 +225,9 @@ impl StreamingParser {
                 ));
                 pos += 1;
                 field_start = pos;
+                quote.on_delimiter();
             } else {
+                quote.on_data(pos);
                 pos += 1;
             }
         }
@@ -228,13 +240,24 @@ impl StreamingParser {
             escape,
         ));
 
-        fields
+        (fields, quote.finish(line.len()))
+    }
+
+    fn push_complete_row(&mut self, start: usize, end: usize) {
+        let (row, violation) = self.parse_row_owned(start, end);
+        if self.violation.is_none() {
+            self.violation = violation.map(|v| v.rebase(self.buffer_offset + start));
+        }
+        if !row.is_empty() {
+            self.complete_rows.push(row);
+        }
     }
 
     /// Compact buffer by removing already-processed data
     fn compact_buffer(&mut self) {
         if self.partial_row_start > 0 {
             self.buffer.drain(0..self.partial_row_start);
+            self.buffer_offset += self.partial_row_start;
             // Adjust positions after compaction
             self.scan_pos -= self.partial_row_start;
             self.partial_row_start = 0;
@@ -272,19 +295,27 @@ impl StreamingParser {
         self.buffer.len()
     }
 
+    /// First strict quoting violation seen so far.
+    #[must_use]
+    pub fn violation(&self) -> Option<Violation> {
+        self.violation
+    }
+
     /// Finalize parsing - treat any remaining data as the last row
     pub fn finalize(&mut self) -> Vec<Vec<Vec<u8>>> {
         // Process any remaining partial row
         if self.partial_row_start < self.buffer.len() {
-            let row = self.parse_row_owned(self.partial_row_start, self.buffer.len());
-            if !row.is_empty() {
-                self.complete_rows.push(row);
-            }
+            self.push_complete_row(self.partial_row_start, self.buffer.len());
+        }
+        if self.violation.is_none() {
+            self.violation = self.quote.finish(self.buffer_offset + self.buffer.len());
         }
 
         // Release the buffer — parsing is done, no need to hold this memory
+        self.buffer_offset += self.buffer.len();
         self.buffer = Vec::new();
         self.partial_row_start = 0;
+        self.buffer_offset = 0;
         self.scan_pos = 0;
 
         // Take all remaining rows
@@ -299,7 +330,9 @@ impl StreamingParser {
         self.complete_rows = Vec::new();
         self.partial_row_start = 0;
         self.scan_pos = 0;
-        self.in_quotes = false;
+        self.quote = QuoteState::new();
+        self.buffer_offset = 0;
+        self.violation = None;
         // separator and escape are preserved
     }
 
@@ -424,6 +457,28 @@ mod tests {
 
         let rows = parser.take_rows(10);
         assert_eq!(rows[0], vec![b"a\rb".to_vec()]);
+    }
+
+    #[test]
+    fn violations_survive_chunk_boundaries_and_compaction() {
+        let mut parser = StreamingParser::new();
+        parser.feed(b"a,b\nc,d\n").unwrap();
+        assert_eq!(parser.buffer_size(), 0);
+
+        parser.feed(b"x").unwrap();
+        parser.feed(b"\"y,2\n").unwrap();
+        assert_eq!(parser.violation(), Some(Violation::UnexpectedQuote(9)));
+    }
+
+    #[test]
+    fn unterminated_quote_is_reported_only_at_finalize() {
+        let mut parser = StreamingParser::new();
+        parser.feed(b"a,b\n").unwrap();
+        parser.feed(b"\"x").unwrap();
+        assert_eq!(parser.violation(), None);
+
+        parser.finalize();
+        assert_eq!(parser.violation(), Some(Violation::UnterminatedQuote(6)));
     }
 
     // --- Memory management tests ---

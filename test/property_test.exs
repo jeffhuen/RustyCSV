@@ -187,7 +187,7 @@ defmodule RustyCSV.PropertyTest do
 
   defp chunk_binary(bin, [size | remaining_sizes], original_chunk_sizes, acc) do
     size = min(size, byte_size(bin))
-    <<chunk::binary-size(size), remaining_bin::binary>> = bin
+    <<chunk::binary-size(^size), remaining_bin::binary>> = bin
     chunk_binary(remaining_bin, remaining_sizes, original_chunk_sizes, [chunk | acc])
   end
 end

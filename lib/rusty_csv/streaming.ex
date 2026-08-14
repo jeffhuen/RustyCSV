@@ -114,6 +114,9 @@ defmodule RustyCSV.Streaming do
   the buffer past this limit, a `:buffer_overflow` exception is raised. Increase
   this if your data contains rows longer than 256 MB, or decrease it to fail
   faster on malformed input.
+
+  The `:strict` option defaults to `true`. Pass `false` to retain RustyCSV's
+  pre-0.4 lenient handling of malformed quoting.
   """
   @type stream_options :: [
           chunk_size: pos_integer(),
@@ -124,6 +127,7 @@ defmodule RustyCSV.Streaming do
           encoding: RustyCSV.encoding(),
           bom: binary(),
           trim_bom: boolean(),
+          strict: boolean(),
           max_buffer_size: pos_integer()
         ]
 
@@ -156,6 +160,9 @@ defmodule RustyCSV.Streaming do
 
     * `:max_buffer_size` - Maximum internal buffer in bytes. Defaults to
       `268_435_456` (256 MB). Raises `:buffer_overflow` if exceeded.
+
+    * `:strict` - Raise `RustyCSV.ParseError` for malformed quoting. Defaults
+      to `true`; pass `false` for the pre-0.4 lenient behavior.
 
   ## Returns
 
@@ -218,6 +225,9 @@ defmodule RustyCSV.Streaming do
     * `:max_buffer_size` - Maximum internal buffer in bytes. Defaults to
       `268_435_456` (256 MB). Raises `:buffer_overflow` if exceeded.
 
+    * `:strict` - Raise `RustyCSV.ParseError` for malformed quoting. Defaults
+      to `true`; pass `false` for the pre-0.4 lenient behavior.
+
   ## Examples
 
       # Parse from a list of chunks
@@ -273,8 +283,8 @@ defmodule RustyCSV.Streaming do
 
         if new_buf_size >= @min_buffer_size do
           combined = new_buf_chunks |> Enum.reverse() |> IO.iodata_to_binary()
-          RustyCSV.Native.streaming_feed(parser, combined)
-          rows = RustyCSV.Native.streaming_next_rows(parser, batch_size)
+          parse!(RustyCSV.Native.streaming_feed(parser, combined))
+          rows = parse!(RustyCSV.Native.streaming_next_rows(parser, batch_size))
           {rows, {[], 0}}
         else
           {[], {new_buf_chunks, new_buf_size}}
@@ -283,11 +293,11 @@ defmodule RustyCSV.Streaming do
       fn {buf_chunks, _buf_size} ->
         unless buf_chunks == [] do
           combined = buf_chunks |> Enum.reverse() |> IO.iodata_to_binary()
-          RustyCSV.Native.streaming_feed(parser, combined)
+          parse!(RustyCSV.Native.streaming_feed(parser, combined))
         end
 
-        rows_from_buffer = RustyCSV.Native.streaming_next_rows(parser, 100_000)
-        final_rows = RustyCSV.Native.streaming_finalize(parser)
+        rows_from_buffer = parse!(RustyCSV.Native.streaming_next_rows(parser, 100_000))
+        final_rows = parse!(RustyCSV.Native.streaming_finalize(parser))
         {rows_from_buffer ++ final_rows, {[], 0}}
       end,
       fn _acc -> :ok end
@@ -337,8 +347,8 @@ defmodule RustyCSV.Streaming do
           {:error, converted, rest} ->
             raise RustyCSV.ParseError,
               message:
-                "Invalid #{inspect(encoding)} sequence at byte #{byte_size(converted)}: " <>
-                  "#{inspect(binary_part(rest, 0, min(byte_size(rest), 10)))}"
+                "Invalid #{inspect(encoding)} sequence after #{byte_size(converted)} " <>
+                  "converted bytes (#{byte_size(rest)} bytes rejected)"
         end
       end,
       fn
@@ -348,8 +358,8 @@ defmodule RustyCSV.Streaming do
         rest ->
           raise RustyCSV.ParseError,
             message:
-              "Truncated #{inspect(encoding)} sequence at end of input: " <>
-                "#{inspect(binary_part(rest, 0, min(byte_size(rest), 10)))}"
+              "Truncated #{inspect(encoding)} sequence at end of input " <>
+                "(#{byte_size(rest)} trailing bytes)"
       end,
       fn _acc -> :ok end
     )
@@ -372,6 +382,9 @@ defmodule RustyCSV.Streaming do
 
     * `:max_buffer_size` - Maximum internal buffer in bytes. Defaults to
       `268_435_456` (256 MB). Raises `:buffer_overflow` if exceeded.
+
+    * `:strict` - Raise `RustyCSV.ParseError` for malformed quoting. Defaults
+      to `true`; pass `false` for the pre-0.4 lenient behavior.
 
   ## Examples
 
@@ -414,6 +427,9 @@ defmodule RustyCSV.Streaming do
     * `:max_buffer_size` - Maximum internal buffer in bytes. Defaults to
       `268_435_456` (256 MB). Raises `:buffer_overflow` if exceeded.
 
+    * `:strict` - Raise `RustyCSV.ParseError` for malformed quoting. Defaults
+      to `true`; pass `false` for the pre-0.4 lenient behavior.
+
   ## Examples
 
       RustyCSV.Streaming.parse_chunks(["a,b\\n1,", "2\\n3,4\\n"])
@@ -434,15 +450,15 @@ defmodule RustyCSV.Streaming do
 
     # Feed all chunks
     Enum.each(chunks, fn chunk ->
-      RustyCSV.Native.streaming_feed(parser, chunk)
+      parse!(RustyCSV.Native.streaming_feed(parser, chunk))
     end)
 
     # Take all available rows
     {available, _buffer_size, _has_partial} = RustyCSV.Native.streaming_status(parser)
-    rows = RustyCSV.Native.streaming_next_rows(parser, available + 1)
+    rows = parse!(RustyCSV.Native.streaming_next_rows(parser, available + 1))
 
     # Finalize to get any remaining partial row
-    final_rows = RustyCSV.Native.streaming_finalize(parser)
+    final_rows = parse!(RustyCSV.Native.streaming_finalize(parser))
 
     rows ++ final_rows
   end
@@ -452,7 +468,13 @@ defmodule RustyCSV.Streaming do
   # ==========================================================================
 
   defp new_parser(separator, escape, newlines, opts) do
-    parser = RustyCSV.Native.streaming_new_with_config(separator, escape, newlines)
+    strict = Keyword.get(opts, :strict, true)
+
+    unless is_boolean(strict) do
+      raise ArgumentError, "invalid :strict option, expected a boolean, got: #{inspect(strict)}"
+    end
+
+    parser = RustyCSV.Native.streaming_new_with_config(separator, escape, newlines, strict)
 
     if max = Keyword.get(opts, :max_buffer_size) do
       RustyCSV.Native.streaming_set_max_buffer(parser, max)
@@ -475,7 +497,7 @@ defmodule RustyCSV.Streaming do
     {available, _buffer_size, _has_partial} = RustyCSV.Native.streaming_status(parser)
 
     if available > 0 do
-      rows = RustyCSV.Native.streaming_next_rows(parser, batch_size)
+      rows = parse!(RustyCSV.Native.streaming_next_rows(parser, batch_size))
       emit_rows(rows, state)
     else
       read_and_process_file(device, parser, chunk_size, batch_size, state)
@@ -495,14 +517,14 @@ defmodule RustyCSV.Streaming do
         raise "Error reading CSV file: #{inspect(reason)}"
 
       chunk when is_binary(chunk) ->
-        {_available, _buffer_size} = RustyCSV.Native.streaming_feed(parser, chunk)
-        rows = RustyCSV.Native.streaming_next_rows(parser, batch_size)
+        {_available, _buffer_size} = parse!(RustyCSV.Native.streaming_feed(parser, chunk))
+        rows = parse!(RustyCSV.Native.streaming_next_rows(parser, batch_size))
         emit_rows(rows, state)
     end
   end
 
   defp finalize_file_stream(parser, device, chunk_size, batch_size, state) do
-    case RustyCSV.Native.streaming_finalize(parser) do
+    case parse!(RustyCSV.Native.streaming_finalize(parser)) do
       [] -> {:halt, state}
       rows -> {rows, {:done, device, parser, chunk_size, batch_size}}
     end
@@ -525,7 +547,7 @@ defmodule RustyCSV.Streaming do
     {available, _buffer_size, _has_partial} = RustyCSV.Native.streaming_status(parser)
 
     if available > 0 do
-      rows = RustyCSV.Native.streaming_next_rows(parser, batch_size)
+      rows = parse!(RustyCSV.Native.streaming_next_rows(parser, batch_size))
       emit_rows(rows, state)
     else
       read_and_process_device(device, parser, chunk_size, batch_size, state)
@@ -545,14 +567,14 @@ defmodule RustyCSV.Streaming do
         raise "Error reading from device: #{inspect(reason)}"
 
       chunk when is_binary(chunk) ->
-        {_available, _buffer_size} = RustyCSV.Native.streaming_feed(parser, chunk)
-        rows = RustyCSV.Native.streaming_next_rows(parser, batch_size)
+        {_available, _buffer_size} = parse!(RustyCSV.Native.streaming_feed(parser, chunk))
+        rows = parse!(RustyCSV.Native.streaming_next_rows(parser, batch_size))
         emit_rows(rows, state)
     end
   end
 
   defp finalize_device_stream(parser, device, chunk_size, batch_size, state) do
-    case RustyCSV.Native.streaming_finalize(parser) do
+    case parse!(RustyCSV.Native.streaming_finalize(parser)) do
       [] -> {:halt, state}
       rows -> {rows, {:device_done, device, parser, chunk_size, batch_size}}
     end
@@ -561,6 +583,8 @@ defmodule RustyCSV.Streaming do
   # ==========================================================================
   # Helpers (Private)
   # ==========================================================================
+
+  defp parse!(result), do: RustyCSV.ParseError.unwrap!(result)
 
   defp emit_rows([], state), do: next_rows_file(state)
   defp emit_rows(rows, state), do: {rows, state}

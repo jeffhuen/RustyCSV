@@ -27,7 +27,7 @@
 
 use std::simd::prelude::*;
 
-use super::simd_index::{RowEnd, StructuralIndex, Violation};
+use super::simd_index::{InputTooLarge, RowEnd, StructuralIndex, Violation};
 
 /// Baseline SIMD chunk size (128-bit).
 pub const CHUNK: usize = 16;
@@ -197,7 +197,7 @@ fn record_violation(bad: u64, esc: u64, base: u32, violation: &mut Option<Violat
         return;
     }
     let bit = bad.trailing_zeros();
-    let pos = base + bit;
+    let pos = (base + bit) as usize;
     *violation = Some(if esc >> bit & 1 == 1 {
         Violation::UnexpectedQuote(pos)
     } else {
@@ -214,13 +214,17 @@ fn record_violation(bad: u64, esc: u64, base: u32, violation: &mut Option<Violat
 /// `separators` are the field delimiter bytes (e.g., &[b',']).
 /// `escape` is the quote/escape byte (e.g., b'"').
 ///
-/// # Panics
+/// # Errors
 ///
-/// Positions are stored as `u32`. Inputs larger than `u32::MAX` (4 GiB)
-/// will silently produce incorrect results due to truncation.
-/// **Callers must validate input length before calling this function.**
-/// The NIF layer enforces this via `guard_input_size`.
-pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> StructuralIndex {
+/// Returns [`InputTooLarge`] when `input` cannot be represented by the
+/// index's `u32` positions.
+pub fn scan_structural(
+    input: &[u8],
+    separators: &[u8],
+    escape: u8,
+) -> Result<StructuralIndex, InputTooLarge> {
+    InputTooLarge::check(input)?;
+
     let est_seps = input.len() / 10 + 16;
     let est_rows = input.len() / 50 + 4;
     let mut field_seps: Vec<u32> = Vec::with_capacity(est_seps);
@@ -370,120 +374,15 @@ pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> Structura
     // seen earlier in byte order takes precedence, matching the order
     // nimble_csv raises in.
     if ends_in_quotes && violation.is_none() {
-        violation = Some(Violation::UnterminatedQuote);
+        violation = Some(Violation::UnterminatedQuote(input.len()));
     }
 
-    StructuralIndex {
+    Ok(StructuralIndex {
         field_seps,
         row_ends,
         input_len: input.len() as u32,
         violation,
-    }
-}
-
-/// Incremental scan for the streaming parser.
-///
-/// Scans `input[start..]` with the given carry state.
-/// Returns the updated carry state (true = currently in quotes).
-///
-/// Quoting violations are reported into `violation` on the same terms as
-/// [`scan_structural`], so the two scanners cannot drift apart in what they
-/// consider well formed. Rule 3 (unterminated quote) is deliberately not
-/// applied here: a feed ending inside a quoted field is normal for a stream
-/// and only becomes an error when the stream itself ends.
-#[allow(dead_code)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors scan_scalar_tail: scan state is threaded explicitly rather \
-              than wrapped in a type that exists only to satisfy the lint"
-)]
-pub fn scan_structural_incremental(
-    input: &[u8],
-    start: usize,
-    separators: &[u8],
-    escape: u8,
-    in_quotes: bool,
-    field_seps: &mut Vec<u32>,
-    row_ends: &mut Vec<RowEnd>,
-    violation: &mut Option<Violation>,
-) -> bool {
-    let mut pos = start;
-    let mut quote_carry: u64 = if in_quotes { 1 } else { 0 };
-
-    // Unlike a whole-input scan, this one resumes mid-stream, so the byte
-    // before `start` decides what the first chunk may legally begin with.
-    let mut carry = match start.checked_sub(1).map(|i| input[i]) {
-        None => QuoteCarry::at_start(),
-        Some(prev) => QuoteCarry {
-            prev_opens_field: prev == b'\n' || prev == escape || is_sep_scalar(prev, separators),
-            prev_closed_field: prev == escape && !in_quotes,
-        },
-    };
-
-    {
-        let esc_splat = Simd::<u8, CHUNK>::splat(escape);
-        let lf_splat = Simd::<u8, CHUNK>::splat(b'\n');
-        let cr_splat = Simd::<u8, CHUNK>::splat(b'\r');
-
-        let sep_splats: Vec<Simd<u8, CHUNK>> = separators
-            .iter()
-            .map(|&s| Simd::<u8, CHUNK>::splat(s))
-            .collect();
-
-        const MASK_16: u64 = (1u64 << 16) - 1;
-
-        while pos + CHUNK <= input.len() {
-            let chunk = Simd::<u8, CHUNK>::from_slice(&input[pos..pos + CHUNK]);
-            let base = pos as u32;
-
-            let esc_mask = chunk.simd_eq(esc_splat).to_bitmask() & MASK_16;
-            let raw_quoted = prefix_xor(esc_mask) & MASK_16;
-            let quoted = raw_quoted ^ (quote_carry.wrapping_neg() & MASK_16);
-            quote_carry ^= (esc_mask.count_ones() as u64) & 1;
-            let not_quoted = !quoted & MASK_16;
-
-            let mut sep_bits: u64 = 0;
-            for splat in &sep_splats {
-                sep_bits |= chunk.simd_eq(*splat).to_bitmask() & MASK_16;
-            }
-
-            let lf_raw = chunk.simd_eq(lf_splat).to_bitmask() & MASK_16;
-            let cr_raw = chunk.simd_eq(cr_splat).to_bitmask() & MASK_16;
-
-            let masks = ChunkMasks {
-                esc: esc_mask,
-                quoted,
-                sep: sep_bits,
-                lf: lf_raw,
-                cr: cr_raw,
-            };
-            let next_is_lf = matches!(input.get(pos + CHUNK), Some(&b) if b == b'\n');
-            let bad = check_quoting(CHUNK as u32, &masks, next_is_lf, &mut carry);
-            record_violation(bad, esc_mask, base, violation);
-
-            extract_positions(sep_bits & not_quoted, base, field_seps);
-            emit_row_ends(
-                input,
-                pos,
-                lf_raw & not_quoted,
-                cr_raw & not_quoted,
-                row_ends,
-            );
-
-            pos += CHUNK;
-        }
-    }
-
-    scan_scalar_tail(
-        input,
-        pos,
-        separators,
-        escape,
-        quote_carry != 0,
-        field_seps,
-        row_ends,
-        violation,
-    )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -559,7 +458,7 @@ fn scan_scalar_tail(
         && violation.is_none()
         && !closes_field_at(input, start, separators, escape)
     {
-        *violation = Some(Violation::TrailingGarbage(start as u32));
+        *violation = Some(Violation::TrailingGarbage(start));
     }
 
     while pos < input.len() {
@@ -573,13 +472,13 @@ fn scan_scalar_tail(
                 }
                 in_quotes = false;
                 if violation.is_none() && !closes_field_at(input, pos + 1, separators, escape) {
-                    *violation = Some(Violation::TrailingGarbage((pos + 1) as u32));
+                    *violation = Some(Violation::TrailingGarbage(pos + 1));
                 }
             }
             pos += 1;
         } else if byte == escape {
             if violation.is_none() && !opens_field_before(input, pos, separators, escape) {
-                *violation = Some(Violation::UnexpectedQuote(pos as u32));
+                *violation = Some(Violation::UnexpectedQuote(pos));
             }
             in_quotes = true;
             pos += 1;
@@ -630,7 +529,7 @@ mod tests {
     // scalar tail, incremental API) remain here.
 
     fn scan(input: &[u8]) -> StructuralIndex {
-        scan_structural(input, b",", b'"')
+        scan_structural(input, b",", b'"').expect("test input fits the structural index")
     }
 
     fn violation_of(input: &str) -> Option<Violation> {
@@ -726,7 +625,7 @@ mod tests {
     fn input_ending_inside_a_quoted_field_is_a_violation() {
         assert_eq!(
             violation_of("a,b\n\"x,2\n"),
-            Some(Violation::UnterminatedQuote)
+            Some(Violation::UnterminatedQuote(9))
         );
     }
 
@@ -745,7 +644,7 @@ mod tests {
     #[test]
     fn quote_violation_is_detected_past_the_first_simd_chunk() {
         let input = with_simd_prefix("x\"y,2\n");
-        let expected = (input.len() - 6 + 1) as u32;
+        let expected = input.len() - 6 + 1;
         assert_eq!(
             violation_of(&input),
             Some(Violation::UnexpectedQuote(expected))
@@ -755,7 +654,7 @@ mod tests {
     #[test]
     fn trailing_garbage_is_detected_past_the_first_simd_chunk() {
         let input = with_simd_prefix("\"x\"junk\n");
-        let expected = (input.len() - 8 + 3) as u32;
+        let expected = input.len() - 8 + 3;
         assert_eq!(
             violation_of(&input),
             Some(Violation::TrailingGarbage(expected))
@@ -778,7 +677,7 @@ mod tests {
             input.push_str("x\"y\n");
             assert_eq!(
                 violation_of(&input),
-                Some(Violation::UnexpectedQuote(quote_at as u32)),
+                Some(Violation::UnexpectedQuote(quote_at)),
                 "pad={pad}"
             );
         }
@@ -944,7 +843,8 @@ mod tests {
         input.extend_from_slice(b"y\n");
         // positions: x*15=0..14 \r=15 \n=16 y=17 \n=18
 
-        let idx = scan_structural(&input, b",", b'"');
+        let idx =
+            scan_structural(&input, b",", b'"').expect("test input fits the structural index");
         assert_eq!(idx.field_seps, vec![]);
         assert_eq!(
             idx.row_ends,
@@ -967,7 +867,8 @@ mod tests {
         input.extend_from_slice(b"cdefghij\",y\n"); // "=23 ,=24 y=25 \n=26
                                                     // Total: 28 bytes — 16-byte SIMD chunk + 12-byte scalar tail
 
-        let idx = scan_structural(&input, b",", b'"');
+        let idx =
+            scan_structural(&input, b",", b'"').expect("test input fits the structural index");
 
         assert_eq!(
             idx.field_seps,
@@ -1004,7 +905,8 @@ mod tests {
         input.extend_from_slice(b",x,y\n");
         // continuation: ,=16 x=17 ,=18 y=19 \n=20
 
-        let idx = scan_structural(&input, b",", b'"');
+        let idx =
+            scan_structural(&input, b",", b'"').expect("test input fits the structural index");
 
         assert_eq!(
             idx.field_seps,
@@ -1028,7 +930,8 @@ mod tests {
         // Second chunk (scalar tail): close quote, real separator, data, newline
         input.extend_from_slice(b"\",y\n"); // "=16 ,=17 y=18 \n=19
 
-        let idx = scan_structural(&input, b",", b'"');
+        let idx =
+            scan_structural(&input, b",", b'"').expect("test input fits the structural index");
 
         assert_eq!(
             idx.field_seps,
@@ -1088,7 +991,8 @@ mod tests {
     #[test]
     fn test_multiple_separators() {
         let input = b"a;b\tc\n";
-        let idx = scan_structural(input, b";\t", b'"');
+        let idx =
+            scan_structural(input, b";\t", b'"').expect("test input fits the structural index");
 
         assert_eq!(idx.field_seps, vec![1, 3]);
         assert_eq!(idx.row_ends, vec![RowEnd { pos: 5, len: 1 }]);
@@ -1110,7 +1014,8 @@ mod tests {
         for _ in 0..100 {
             input.extend_from_slice(line);
         }
-        let idx = scan_structural(&input, b",", b'"');
+        let idx =
+            scan_structural(&input, b",", b'"').expect("test input fits the structural index");
 
         assert_eq!(idx.row_ends.len(), 100);
 
@@ -1125,54 +1030,6 @@ mod tests {
             assert_eq!(re.pos, (i as u32) * 12 + 11, "row {i} end position");
             assert_eq!(re.len, 1, "row {i} end length");
         }
-    }
-
-    // =======================================================================
-    // Incremental scan API
-    // =======================================================================
-
-    #[test]
-    fn test_incremental_scan_exact_output() {
-        let input = b"a,b\nc,d\n";
-        let mut seps = Vec::new();
-        let mut ends = Vec::new();
-
-        let carry = scan_structural_incremental(
-            input, 0, b",", b'"', false, &mut seps, &mut ends, &mut None,
-        );
-
-        assert!(!carry);
-        assert_eq!(seps, vec![1, 5]);
-        assert_eq!(
-            ends,
-            vec![RowEnd { pos: 3, len: 1 }, RowEnd { pos: 7, len: 1 }]
-        );
-    }
-
-    #[test]
-    fn test_incremental_with_in_quotes_true() {
-        // Simulate resuming mid-quoted-field: in_quotes=true means we're inside a quote
-        // from a previous chunk. Separator should be suppressed until closing quote.
-        let input = b"inside,more\",real\n";
-        // positions: i=0 n=1 s=2 i=3 d=4 e=5 ,=6 m=7 o=8 r=9 e=10 "=11 ,=12 r=13 e=14 a=15 l=16 \n=17
-        // With in_quotes=true: everything before the " at 11 is inside quotes.
-        // comma at 6: suppressed (in quotes)
-        // " at 11: closes the quote
-        // comma at 12: real separator
-        let mut seps = Vec::new();
-        let mut ends = Vec::new();
-
-        let carry = scan_structural_incremental(
-            input, 0, b",", b'"', true, &mut seps, &mut ends, &mut None,
-        );
-
-        assert!(!carry, "quote closed at pos 11, should not be in quotes");
-        assert_eq!(
-            seps,
-            vec![12],
-            "comma at 6 is inside quotes, only 12 is real"
-        );
-        assert_eq!(ends, vec![RowEnd { pos: 17, len: 1 }]);
     }
 
     // =======================================================================

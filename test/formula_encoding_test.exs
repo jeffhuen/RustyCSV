@@ -669,21 +669,18 @@ defmodule RustyCSV.FormulaEncodingTest do
       assert stream == batch
     end
 
-    test "formula + UTF-16: stream output equals batch output (minus BOM)" do
+    test "formula + UTF-16: stream output equals batch output" do
       rows = [["=test", "ok"], ["+dirty\ttab", "safe"]]
       batch = RFormulaUTF16.dump_to_iodata(rows) |> IO.iodata_to_binary()
       stream = rows |> RFormulaUTF16.dump_to_stream() |> Enum.to_list() |> IO.iodata_to_binary()
-      # Batch has BOM, stream does not
-      <<0xFF, 0xFE, batch_no_bom::binary>> = batch
-      assert stream == batch_no_bom
+      assert stream == batch
     end
 
-    test "encoding only: stream output equals batch output (minus BOM)" do
+    test "encoding only: stream output equals batch output" do
       rows = [["hello", "world"], ["has\ttab", "café"]]
       batch = RUTF16.dump_to_iodata(rows) |> IO.iodata_to_binary()
       stream = rows |> RUTF16.dump_to_stream() |> Enum.to_list() |> IO.iodata_to_binary()
-      <<0xFF, 0xFE, batch_no_bom::binary>> = batch
-      assert stream == batch_no_bom
+      assert stream == batch
     end
   end
 

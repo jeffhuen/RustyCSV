@@ -3,9 +3,48 @@
 //! Produced by simd_scanner, consumed by all strategies.
 //! Positions use u32 to halve memory vs usize on 64-bit systems.
 //!
-//! **Limit**: inputs must not exceed u32::MAX (4 GiB). The NIF boundary
-//! enforces this via `guard_input_size`; if you call `scan_structural`
-//! from Rust code directly, you must validate the input length yourself.
+//! **Limit**: inputs must not exceed [`MAX_INPUT_SIZE`]. The scanner rejects
+//! anything larger rather than truncating positions into silently wrong
+//! answers, so callers do not have to remember a separate guard.
+
+/// Largest input the structural index can describe, `u32::MAX` inclusive.
+///
+/// Every separator and row-terminator position is stored as a `u32`, so an
+/// input longer than this cannot be indexed without wrapping those positions.
+pub const MAX_INPUT_SIZE: usize = u32::MAX as usize;
+
+/// Input too large for the `u32` byte positions the structural index uses.
+///
+/// Returned by scanning entry points instead of truncating. This describes
+/// input that cannot be indexed at all, which is a different condition from
+/// [`Violation`], where scanning succeeded and the CSV itself is malformed.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("input of {len} bytes exceeds the {max} byte limit for u32 positions")]
+pub struct InputTooLarge {
+    /// Length of the rejected input.
+    pub len: usize,
+    /// Largest input that can be indexed, equal to [`MAX_INPUT_SIZE`].
+    pub max: usize,
+}
+
+impl InputTooLarge {
+    /// Reject `input` when it cannot be described by `u32` positions.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when `input` is longer than [`MAX_INPUT_SIZE`].
+    #[inline]
+    pub const fn check(input: &[u8]) -> Result<(), Self> {
+        if input.len() > MAX_INPUT_SIZE {
+            Err(Self {
+                len: input.len(),
+                max: MAX_INPUT_SIZE,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// A newline terminator position.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -27,13 +66,63 @@ pub struct RowEnd {
 pub enum Violation {
     /// A quote opened a field somewhere other than the start of a field.
     /// Byte position of the offending quote.
-    UnexpectedQuote(u32),
+    UnexpectedQuote(usize),
     /// A closing quote was followed by something other than a separator, a
     /// row terminator, another quote, or end of input. Byte position of the
     /// offending byte, not of the quote.
-    TrailingGarbage(u32),
+    TrailingGarbage(usize),
     /// Input ended while still inside a quoted field.
-    UnterminatedQuote,
+    /// Byte position immediately after the final input byte.
+    UnterminatedQuote(usize),
+}
+
+impl Violation {
+    /// Translate a violation from slice-relative to input-relative offsets.
+    #[inline]
+    pub const fn rebase(self, base: usize) -> Self {
+        match self {
+            Self::UnexpectedQuote(pos) => Self::UnexpectedQuote(pos + base),
+            Self::TrailingGarbage(pos) => Self::TrailingGarbage(pos + base),
+            Self::UnterminatedQuote(pos) => Self::UnterminatedQuote(pos + base),
+        }
+    }
+
+    /// Byte position associated with the violation.
+    #[inline]
+    pub const fn position(self) -> usize {
+        match self {
+            Self::UnexpectedQuote(pos)
+            | Self::TrailingGarbage(pos)
+            | Self::UnterminatedQuote(pos) => pos,
+        }
+    }
+}
+
+/// Field boundaries for every row, plus whatever quoting rule the input broke.
+///
+/// Returned by the boundary-producing entry points the NIF consumes. A
+/// violation means scanning succeeded and produced usable rows while the CSV
+/// itself is malformed, so the caller decides whether that is fatal. That is
+/// what makes lenient parsing free: nothing is raised unless someone asks.
+#[derive(Clone, Debug)]
+#[must_use]
+pub struct ScannedBoundaries {
+    /// `(start, end)` byte ranges, one inner Vec per row.
+    pub rows: Vec<Vec<(usize, usize)>>,
+    /// First quoting rule broken, in byte order, or `None` for well-formed
+    /// input.
+    pub violation: Option<Violation>,
+}
+
+impl ScannedBoundaries {
+    /// Wrap rows that broke no quoting rule.
+    #[inline]
+    pub fn well_formed(rows: Vec<Vec<(usize, usize)>>) -> Self {
+        Self {
+            rows,
+            violation: None,
+        }
+    }
 }
 
 /// Structural index: positions of all unquoted separators and row endings.

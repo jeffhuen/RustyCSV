@@ -5,6 +5,7 @@
 //! parser, the indexed-alias batch parser, parallel, zero_copy, and streaming
 //! entrypoints. Failures pinpoint which entrypoint diverges.
 
+use rustycsv::core::ScannedBoundaries;
 use rustycsv::strategy::direct::{parse_csv_full_multi_sep, parse_csv_full_with_config};
 use rustycsv::strategy::parallel::{parse_csv_parallel_multi_sep, parse_csv_parallel_with_config};
 use rustycsv::strategy::streaming::StreamingParser;
@@ -40,9 +41,10 @@ fn owned_to_strings(rows: Vec<Vec<Vec<u8>>>) -> Vec<Vec<String>> {
 }
 
 /// Convert boundary positions to actual field strings by slicing from input.
-fn boundaries_to_strings(input: &[u8], boundaries: Vec<Vec<(usize, usize)>>) -> Vec<Vec<String>> {
+fn boundaries_to_strings(input: &[u8], boundaries: ScannedBoundaries) -> Vec<Vec<String>> {
     use rustycsv::core::extract_field_cow_with_escape;
     boundaries
+        .rows
         .into_iter()
         .map(|row| {
             row.into_iter()
@@ -92,20 +94,32 @@ macro_rules! conformance {
                 .collect();
 
             // Direct
-            let direct = cow_to_strings(parse_csv_full_with_config(input, sep, b'"'));
+            let direct = cow_to_strings(
+                parse_csv_full_with_config(input, sep, b'"')
+                    .expect("test input fits the structural index"),
+            );
             assert_eq!(direct, expected_strings, "FAILED: direct");
 
             // Two-phase
-            let two_phase = cow_to_strings(parse_csv_indexed_with_config(input, sep, b'"'));
+            let two_phase = cow_to_strings(
+                parse_csv_indexed_with_config(input, sep, b'"')
+                    .expect("test input fits the structural index"),
+            );
             assert_eq!(two_phase, expected_strings, "FAILED: two_phase");
 
             // Parallel (skips empty rows)
-            let parallel = owned_to_strings(parse_csv_parallel_with_config(input, sep, b'"'));
+            let parallel = owned_to_strings(
+                parse_csv_parallel_with_config(input, sep, b'"')
+                    .expect("test input fits the structural index"),
+            );
             assert_eq!(parallel, expected_nonempty, "FAILED: parallel");
 
             // Zero-copy (preserves all rows including empty)
-            let zc =
-                boundaries_to_strings(input, parse_csv_boundaries_with_config(input, sep, b'"'));
+            let zc = boundaries_to_strings(
+                input,
+                parse_csv_boundaries_with_config(input, sep, b'"')
+                    .expect("test input fits the structural index"),
+            );
             assert_eq!(zc, expected_strings, "FAILED: zero_copy");
 
             // Streaming (skips empty rows)
@@ -234,16 +248,25 @@ macro_rules! conformance_multi_sep {
                 .collect();
 
             // Direct
-            let direct = cow_to_strings(parse_csv_full_multi_sep(input, seps, b'"'));
+            let direct = cow_to_strings(
+                parse_csv_full_multi_sep(input, seps, b'"')
+                    .expect("test input fits the structural index"),
+            );
             assert_eq!(direct, expected_strings, "FAILED: direct multi_sep");
 
             // Parallel
-            let parallel = owned_to_strings(parse_csv_parallel_multi_sep(input, seps, b'"'));
+            let parallel = owned_to_strings(
+                parse_csv_parallel_multi_sep(input, seps, b'"')
+                    .expect("test input fits the structural index"),
+            );
             assert_eq!(parallel, expected_nonempty, "FAILED: parallel multi_sep");
 
             // Zero-copy
-            let zc =
-                boundaries_to_strings(input, parse_csv_boundaries_multi_sep(input, seps, b'"'));
+            let zc = boundaries_to_strings(
+                input,
+                parse_csv_boundaries_multi_sep(input, seps, b'"')
+                    .expect("test input fits the structural index"),
+            );
             assert_eq!(zc, expected_nonempty, "FAILED: zero_copy multi_sep");
         }
     };
@@ -302,9 +325,10 @@ macro_rules! conformance_general {
 
             // Boundaries (skips empty rows)
             // Note: boundaries returns raw positions, verify count and field count
-            let boundaries = parse_csv_boundaries_general(input, &seps, &esc);
+            let boundaries = parse_csv_boundaries_general(input, &seps, &esc)
+                .expect("test input fits the structural index");
             assert_eq!(
-                boundaries.len(),
+                boundaries.rows.len(),
                 expected_nonempty.len(),
                 "FAILED: general boundaries row count"
             );
@@ -369,9 +393,10 @@ macro_rules! conformance_custom_newline {
             assert_eq!(parallel, expected_nonempty, "FAILED: custom_nl parallel");
 
             // Boundaries with newlines
-            let boundaries = parse_csv_boundaries_general_with_newlines(input, &seps, &esc, &nl);
+            let boundaries = parse_csv_boundaries_general_with_newlines(input, &seps, &esc, &nl)
+                .expect("test input fits the structural index");
             assert_eq!(
-                boundaries.len(),
+                boundaries.rows.len(),
                 expected_nonempty.len(),
                 "FAILED: custom_nl boundaries row count"
             );
