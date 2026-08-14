@@ -31,11 +31,11 @@ defmodule RustyCSV.ConcurrentAccessTest do
 
       # All feeds should succeed without crash
       results = Task.await_many(tasks, 5_000)
-      assert length(results) == 20
+      assert Enum.count(results) == 20
 
       # Drain all rows — should have exactly 20 rows
       rows = Native.streaming_next_rows(parser, 100)
-      assert length(rows) == 20
+      assert Enum.count(rows) == 20
     end
 
     test "concurrent feed and drain on the same parser" do
@@ -129,7 +129,7 @@ defmodule RustyCSV.ConcurrentAccessTest do
 
       # Exactly one should have gotten the partial row "3,4"
       non_empty = Enum.reject(results, &(&1 == []))
-      assert length(non_empty) == 1
+      assert [_row] = non_empty
       assert hd(non_empty) == [["3", "4"]]
     end
   end
@@ -155,10 +155,13 @@ defmodule RustyCSV.ConcurrentAccessTest do
         end
 
       results = Task.await_many(tasks, 15_000)
-      assert length(results) == 50
+      assert Enum.count(results) == 50
 
       # Each task exercised all 5 public batch strategy atoms.
-      assert Enum.all?(results, &(length(&1) == TestStrategyMatrix.batch_strategy_atom_count()))
+      assert Enum.all?(
+               results,
+               &(Enum.count(&1) == TestStrategyMatrix.batch_strategy_atom_count())
+             )
     end
 
     test "many processes parsing the same large CSV concurrently" do
@@ -178,7 +181,7 @@ defmodule RustyCSV.ConcurrentAccessTest do
 
       # All 20 should produce identical results
       first = hd(results)
-      assert length(first) == 100
+      assert Enum.count(first) == 100
 
       for result <- results do
         assert result == first
@@ -215,7 +218,7 @@ defmodule RustyCSV.ConcurrentAccessTest do
       results = Task.await_many(tasks, 5_000)
 
       for rows <- results do
-        assert length(rows) == 10
+        assert Enum.count(rows) == 10
       end
     end
   end

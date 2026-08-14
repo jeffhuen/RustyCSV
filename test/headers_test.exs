@@ -292,7 +292,7 @@ defmodule RustyCSV.HeadersTest do
 
       result = CSV.parse_string(input, headers: true)
 
-      assert length(result) == 200
+      assert Enum.count(result) == 200
       assert hd(result) == %{"id" => "1", "val" => "v1"}
       assert List.last(result) == %{"id" => "200", "val" => "v200"}
     end
@@ -397,7 +397,7 @@ defmodule RustyCSV.HeadersTest do
         |> CSV.parse_stream(headers: true)
         |> Enum.to_list()
 
-      assert length(result) == 200
+      assert Enum.count(result) == 200
       assert hd(result) == %{"id" => "1", "val" => "v1"}
       assert List.last(result) == %{"id" => "200", "val" => "v200"}
     end

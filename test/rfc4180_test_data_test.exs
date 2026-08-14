@@ -136,7 +136,7 @@ defmodule RFC4180TestDataTest do
       # Parse with headers
       [headers | rows] = CSV.parse_string(csv, skip_headers: false)
       assert headers == ["foo", "bar", "baz"]
-      assert length(rows) == 1
+      assert [_row] = rows
     end
 
     test "header-no-rows.csv - headers only, no data" do

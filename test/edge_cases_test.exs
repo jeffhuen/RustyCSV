@@ -158,7 +158,7 @@ defmodule EdgeCasesTest do
     test "rows with different field counts" do
       # "Ragged" CSV - some parsers error, some accept
       result = CSV.parse_string("a,b,c\n1,2\n3,4,5,6\n", skip_headers: false)
-      assert length(result) == 3
+      assert Enum.count(result) == 3
       assert hd(result) == ["a", "b", "c"]
     end
 
@@ -170,7 +170,7 @@ defmodule EdgeCasesTest do
     test "many columns" do
       row = Enum.join(1..100, ",")
       result = CSV.parse_string(row <> "\n", skip_headers: false)
-      assert length(hd(result)) == 100
+      assert Enum.count(hd(result)) == 100
     end
   end
 
@@ -209,7 +209,7 @@ defmodule EdgeCasesTest do
   describe "special characters in fields" do
     test "null bytes" do
       result = CSV.parse_string("a\x00b,c\n", skip_headers: false)
-      assert length(result) == 1
+      assert [_row] = result
     end
 
     test "control characters" do
@@ -238,13 +238,13 @@ defmodule EdgeCasesTest do
     test "many rows" do
       csv = Enum.map_join(1..1000, "\n", fn i -> "row#{i},#{i}" end) <> "\n"
       result = CSV.parse_string(csv, skip_headers: false)
-      assert length(result) == 1000
+      assert Enum.count(result) == 1000
     end
 
     test "many columns" do
       row = Enum.map_join(1..500, ",", &"col#{&1}")
       result = CSV.parse_string(row <> "\n", skip_headers: false)
-      assert length(hd(result)) == 500
+      assert Enum.count(hd(result)) == 500
     end
   end
 

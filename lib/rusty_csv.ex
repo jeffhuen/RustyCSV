@@ -774,9 +774,7 @@ defmodule RustyCSV do
       end
     end)
 
-    # List of binaries for the NIF
-    binaries = Enum.map(separators, fn sep -> sep end)
-    {separators, binaries}
+    {separators, separators}
   end
 
   defp validate_and_normalize_separator!(other) do
