@@ -1,4 +1,4 @@
-// CSV parsing strategies
+//! CSV parsing strategies
 
 pub mod direct;
 pub mod encode;

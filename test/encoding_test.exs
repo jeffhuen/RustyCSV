@@ -349,7 +349,7 @@ defmodule RustyCSV.EncodingTest do
       assert Keyword.get(TestUTF16LE.options(), :encoding) == {:utf16, :little}
       assert Keyword.get(TestUTF32LE.options(), :encoding) == {:utf32, :little}
       assert Keyword.get(TestLatin1.options(), :encoding) == :latin1
-      assert Keyword.get(RustyCSV.RFC4180.options(), :encoding) == :utf8
+      assert Keyword.get(RustyCSV.RFC4180.options(), :encoding) == nil
     end
   end
 

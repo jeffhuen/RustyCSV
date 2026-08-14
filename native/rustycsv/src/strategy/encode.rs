@@ -1,14 +1,14 @@
-// CSV encoding helpers — field scanning and quoting for the encoding NIF
-//
-// The encoding NIF (encode_string in lib.rs) walks Erlang lists, scans each
-// field for characters requiring quoting, and writes all output into a single
-// flat Vec<u8> buffer that becomes one NewBinary. These helpers handle the
-// scanning ("does this field need quoting?") and quoting ("wrap + double
-// escapes").
-//
-// Scanning strategies:
-//   SIMD:    portable_simd 16/32-byte vectorized comparison (fastest)
-//   General: byte-by-byte for multi-byte separator/escape patterns
+//! CSV encoding helpers — field scanning and quoting for the encoding NIF
+//!
+//! The encoding NIF (encode_string in lib.rs) walks Erlang lists, scans each
+//! field for characters requiring quoting, and writes all output into a single
+//! flat Vec<u8> buffer that becomes one NewBinary. These helpers handle the
+//! scanning ("does this field need quoting?") and quoting ("wrap + double
+//! escapes").
+//!
+//! Scanning strategies:
+//!   SIMD:    portable_simd 16/32-byte vectorized comparison (fastest)
+//!   General: byte-by-byte for multi-byte separator/escape patterns
 
 use std::simd::prelude::*;
 

@@ -1,4 +1,4 @@
-// Core primitives for CSV parsing
+//! Core primitives for CSV parsing
 
 pub mod field;
 pub mod newlines;
@@ -11,10 +11,10 @@ pub use newlines::*;
 pub use scanner::*;
 #[allow(unused_imports)]
 pub use simd_index::RowEnd;
-pub use simd_index::StructuralIndex;
+pub use simd_index::{
+    InputTooLarge, ScannedBoundaries, StructuralIndex, Violation, MAX_INPUT_SIZE,
+};
 pub use simd_scanner::scan_structural;
-#[allow(unused_imports)]
-pub use simd_scanner::scan_structural_incremental;
 pub use simd_scanner::CHUNK;
 #[cfg(target_feature = "avx2")]
 pub use simd_scanner::WIDE;

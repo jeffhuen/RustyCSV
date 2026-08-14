@@ -30,7 +30,7 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 ### Validated Correctness
 
-- **464 tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
+- **484 ExUnit tests plus 131 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
 - **Cross-strategy validation** - All strategies produce identical output
 - **NimbleCSV compatibility** - Verified identical behavior for all API functions
 
@@ -72,10 +72,10 @@ RustyCSV is designed as a drop-in replacement for NimbleCSV. It implements the c
 | `parse_string/2` | Parse CSV string to list of rows | ✅ |
 | `parse_stream/2` | Lazily parse a stream | ✅ |
 | `parse_enumerable/2` | Parse any enumerable | ✅ |
-| `dump_to_iodata/1` | Convert rows to iodata (default path returns a flat binary — see [Encoding](#nif-accelerated-encoding-flat-binary)) | ✅ |
+| `dump_to_iodata/1` | Convert rows to list-shaped iodata | ✅ |
 | `dump_to_stream/1` | Lazily convert rows to iodata stream | ✅ |
 | `to_line_stream/1` | Convert arbitrary chunks to lines | ✅ |
-| `options/0` | Return module configuration | ✅ |
+| `options/0` | Return the original definition options | ✅ |
 
 ### `define/2` Options
 
@@ -334,13 +334,19 @@ headers: true/[...]       →  new NIFs       →  boundaries_to_maps_hybrid (li
 - More columns than keys → extra columns ignored
 - Duplicate keys → last value wins (incremental map building fallback)
 
-### NIF-Accelerated Encoding (Flat Binary)
+### NIF-Accelerated Encoding
 
-`dump_to_iodata` dispatches to the `encode_string` Rust NIF by default, which writes CSV bytes into a `Vec<u8>` and returns a single flat binary via `NewBinary`. Parallel encoding and BOM-enabled modules may return list-shaped iodata at the Elixir wrapper layer.
+`dump_to_iodata` dispatches to the `encode_string` Rust NIF by default, which
+writes each row into a reusable `Vec<u8>` and returns one `NewBinary` per row.
+The Elixir wrapper places each row binary in its own iodata list, preserving
+NimbleCSV's top-level row shape.
 
-**Why flat binary instead of iodata:**
+**Why one binary per row instead of per-field iodata:**
 
-The previous approach collected every field, separator, and newline as an Erlang `Term` in a `Vec<Term>`. Each `Term` is 16 bytes (ERL_NIF_TERM + Env pointer), so 100K rows × 8 cols generated ~1.6M entries × 16 bytes = ~25 MB of Rust heap just for term handles — far more than the actual CSV output (~8 MB). The flat binary approach writes raw bytes into a `Vec<u8>` sized proportionally to the output, then does a single `memcpy` into a `NewBinary`. This is 18–63% faster and uses 3–6x less NIF memory.
+The encoder avoids a BEAM term for every field, separator, and newline. It
+builds each row in a reusable Rust buffer, then copies that row into one BEAM
+binary. This keeps the public row-level shape while bounding term construction
+to one binary and one list cell per row.
 
 **Architecture:**
 
@@ -353,7 +359,7 @@ Input: Erlang list of lists (rows of binary fields)
   │    ├─ Write to Vec<u8>: raw bytes / quoted bytes / formula-prefixed
   │    └─ If non-UTF-8: encode field bytes to target encoding
   │
-  └─ memcpy Vec<u8> → NewBinary (single BEAM allocation)
+  └─ memcpy row Vec<u8> → NewBinary (one BEAM binary per row)
 ```
 
 **Four PostProcess modes** (zero-overhead dispatch via enum):

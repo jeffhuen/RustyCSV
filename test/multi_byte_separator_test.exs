@@ -128,7 +128,7 @@ defmodule MultiByteSeparatorTest do
   describe "options/0" do
     test "returns multi-byte separator" do
       opts = TestDoubleColon.options()
-      assert opts[:separator] == ["::"]
+      assert opts[:separator] == "::"
     end
 
     test "returns mixed separator list" do

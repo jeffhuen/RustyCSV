@@ -103,7 +103,10 @@ defmodule CsvSpectrumTest do
 
     test "location_coordinates.csv - numeric/coordinate data" do
       {csv, expected} = load_test("location_coordinates")
-      result = CSV.parse_string(csv, skip_headers: false) |> to_json_format()
+
+      # The fixture contains unescaped quote characters in coordinate values.
+      # Keep it as a compatibility check for the explicit lenient mode.
+      result = CSV.parse_string(csv, skip_headers: false, strict: false) |> to_json_format()
       assert result == expected
     end
   end

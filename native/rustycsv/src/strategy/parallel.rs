@@ -1,36 +1,42 @@
-// Parallel Parser using Rayon
-//
-// Strategy:
-// 1. Single-threaded: SIMD structural scan → row boundaries + field separator positions
-// 2. O(n) cursor walk: collect (row_start, content_end, sep_lo, sep_hi) into a flat Vec
-// 3. Parallel: Each worker slices into the shared field_seps array — no re-scanning
-//
-// ## Evolution of field-position reuse from the structural index
-//
-// The SIMD structural scanner already finds every separator position. We tried
-// three approaches to reuse those positions instead of re-scanning with memchr:
-//
-// Approach A — Pre-collect Vec<Vec<(u32, u32)>> field bounds, then par_iter:
-//   Simple CSV: 567 → 464 ips (-18%)
-//   Large 7MB:  40.6 → 38.0 ips (-6%)
-//   Cause: 10K+ inner Vec allocations for per-row field bounds.
-//
-// Approach B — Share &StructuralIndex, each worker calls fields_in_row() (binary search):
-//   Simple CSV: 567 → 503 ips (-11%)
-//   Large 7MB:  40.6 → 35.7 ips (-12%)
-//   Very Large: 1.99 → 1.80 ips (-10%)
-//   Cause: Two partition_point calls per row = O(log n) per row.
-//
-// Approach C (current) — Flat index + direct slice:
-//   O(n) cursor walk builds a single flat Vec<(u32, u32, usize, usize)> mapping
-//   each row to its slice of field_seps. Each parallel worker indexes directly
-//   into the shared &[u32] — zero per-row allocation, O(1) lookup, no re-scanning.
-//   This avoids A's allocation overhead and B's binary search overhead.
-//
-// Important: We can't build BEAM terms on worker threads, so we return
-// owned Vec<Vec<Vec<u8>>> and convert to terms on the scheduler thread.
+//! Parallel Parser using Rayon
+//!
+//! The `*_boundaries*` entry points are consumed by the NIF, so they carry any
+//! quoting [`Violation`](crate::core::Violation) alongside the rows. The
+//! owned-row entry points stay lenient, matching [`direct`](super::direct).
+//!
+//! Strategy:
+//! 1. Single-threaded: SIMD structural scan → row boundaries + field separator positions
+//! 2. O(n) cursor walk: collect (row_start, content_end, sep_lo, sep_hi) into a flat Vec
+//! 3. Parallel: Each worker slices into the shared field_seps array — no re-scanning
+//!
+//! ## Evolution of field-position reuse from the structural index
+//!
+//! The SIMD structural scanner already finds every separator position. We tried
+//! three approaches to reuse those positions instead of re-scanning with memchr:
+//!
+//! Approach A — Pre-collect Vec<Vec<(u32, u32)>> field bounds, then par_iter:
+//!   Simple CSV: 567 → 464 ips (-18%)
+//!   Large 7MB:  40.6 → 38.0 ips (-6%)
+//!   Cause: 10K+ inner Vec allocations for per-row field bounds.
+//!
+//! Approach B — Share &StructuralIndex, each worker calls fields_in_row() (binary search):
+//!   Simple CSV: 567 → 503 ips (-11%)
+//!   Large 7MB:  40.6 → 35.7 ips (-12%)
+//!   Very Large: 1.99 → 1.80 ips (-10%)
+//!   Cause: Two partition_point calls per row = O(log n) per row.
+//!
+//! Approach C (current) — Flat index + direct slice:
+//!   O(n) cursor walk builds a single flat Vec<(u32, u32, usize, usize)> mapping
+//!   each row to its slice of field_seps. Each parallel worker indexes directly
+//!   into the shared &[u32] — zero per-row allocation, O(1) lookup, no re-scanning.
+//!   This avoids A's allocation overhead and B's binary search overhead.
+//!
+//! Important: We can't build BEAM terms on worker threads, so we return
+//! owned Vec<Vec<Vec<u8>>> and convert to terms on the scheduler thread.
 
-use crate::core::{extract_field_owned_with_escape, scan_structural};
+use crate::core::{
+    extract_field_owned_with_escape, scan_structural, InputTooLarge, ScannedBoundaries,
+};
 use rayon::prelude::*;
 use std::sync::OnceLock;
 
@@ -61,7 +67,7 @@ pub(crate) fn run_parallel<T: Send, F: FnOnce() -> T + Send>(f: F) -> T {
 }
 
 /// Parse CSV in parallel, returning owned rows
-pub fn parse_csv_parallel(input: &[u8]) -> Vec<Vec<Vec<u8>>> {
+pub fn parse_csv_parallel(input: &[u8]) -> Result<Vec<Vec<Vec<u8>>>, InputTooLarge> {
     parse_csv_parallel_with_config(input, b',', b'"')
 }
 
@@ -70,9 +76,9 @@ pub fn parse_csv_parallel_with_config(
     input: &[u8],
     separator: u8,
     escape: u8,
-) -> Vec<Vec<Vec<u8>>> {
+) -> Result<Vec<Vec<Vec<u8>>>, InputTooLarge> {
     // Phase 1: SIMD structural scan → row boundaries + field separator positions
-    let idx = scan_structural(input, &[separator], escape);
+    let idx = scan_structural(input, &[separator], escape)?;
     let field_seps: &[u32] = &idx.field_seps;
 
     // Phase 2: O(n) cursor walk — map each row to its slice of field_seps
@@ -87,11 +93,11 @@ pub fn parse_csv_parallel_with_config(
     }
 
     if row_ranges.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Phase 3: Parallel field extraction — each worker slices into shared field_seps
-    run_parallel(|| {
+    Ok(run_parallel(|| {
         row_ranges
             .into_par_iter()
             .filter_map(|(rs, re, sep_lo, sep_hi)| {
@@ -126,7 +132,7 @@ pub fn parse_csv_parallel_with_config(
                 }
             })
             .collect()
-    })
+    }))
 }
 
 /// Parse CSV in parallel with multiple separator support
@@ -134,13 +140,13 @@ pub fn parse_csv_parallel_multi_sep(
     input: &[u8],
     separators: &[u8],
     escape: u8,
-) -> Vec<Vec<Vec<u8>>> {
+) -> Result<Vec<Vec<Vec<u8>>>, InputTooLarge> {
     if separators.len() == 1 {
         return parse_csv_parallel_with_config(input, separators[0], escape);
     }
 
     // Phase 1: SIMD structural scan → row boundaries + field separator positions
-    let idx = scan_structural(input, separators, escape);
+    let idx = scan_structural(input, separators, escape)?;
     let field_seps: &[u32] = &idx.field_seps;
 
     // Phase 2: O(n) cursor walk — map each row to its slice of field_seps
@@ -155,11 +161,11 @@ pub fn parse_csv_parallel_multi_sep(
     }
 
     if row_ranges.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Phase 3: Parallel field extraction — each worker slices into shared field_seps
-    run_parallel(|| {
+    Ok(run_parallel(|| {
         row_ranges
             .into_par_iter()
             .filter_map(|(rs, re, sep_lo, sep_hi)| {
@@ -194,7 +200,7 @@ pub fn parse_csv_parallel_multi_sep(
                 }
             })
             .collect()
-    })
+    }))
 }
 
 // ============================================================================
@@ -202,7 +208,7 @@ pub fn parse_csv_parallel_multi_sep(
 // ============================================================================
 
 /// Parse CSV in parallel, returning field boundaries (zero-copy)
-pub fn parse_csv_parallel_boundaries(input: &[u8]) -> Vec<Vec<(usize, usize)>> {
+pub fn parse_csv_parallel_boundaries(input: &[u8]) -> Result<ScannedBoundaries, InputTooLarge> {
     parse_csv_parallel_boundaries_with_config(input, b',', b'"')
 }
 
@@ -211,9 +217,9 @@ pub fn parse_csv_parallel_boundaries_with_config(
     input: &[u8],
     separator: u8,
     escape: u8,
-) -> Vec<Vec<(usize, usize)>> {
+) -> Result<ScannedBoundaries, InputTooLarge> {
     // Phase 1: SIMD structural scan → row boundaries + field separator positions
-    let idx = scan_structural(input, &[separator], escape);
+    let idx = scan_structural(input, &[separator], escape)?;
     let field_seps: &[u32] = &idx.field_seps;
 
     // Phase 2: O(n) cursor walk — map each row to its slice of field_seps
@@ -228,11 +234,11 @@ pub fn parse_csv_parallel_boundaries_with_config(
     }
 
     if row_ranges.is_empty() {
-        return Vec::new();
+        return Ok(ScannedBoundaries::well_formed(Vec::new()));
     }
 
     // Phase 3: Parallel boundary extraction — just push (start, end) tuples
-    run_parallel(|| {
+    let rows = run_parallel(|| {
         row_ranges
             .into_par_iter()
             .filter_map(|(rs, re, sep_lo, sep_hi)| {
@@ -257,6 +263,11 @@ pub fn parse_csv_parallel_boundaries_with_config(
                 }
             })
             .collect()
+    });
+
+    Ok(ScannedBoundaries {
+        rows,
+        violation: idx.violation,
     })
 }
 
@@ -265,13 +276,13 @@ pub fn parse_csv_parallel_boundaries_multi_sep(
     input: &[u8],
     separators: &[u8],
     escape: u8,
-) -> Vec<Vec<(usize, usize)>> {
+) -> Result<ScannedBoundaries, InputTooLarge> {
     if separators.len() == 1 {
         return parse_csv_parallel_boundaries_with_config(input, separators[0], escape);
     }
 
     // Phase 1: SIMD structural scan → row boundaries + field separator positions
-    let idx = scan_structural(input, separators, escape);
+    let idx = scan_structural(input, separators, escape)?;
     let field_seps: &[u32] = &idx.field_seps;
 
     // Phase 2: O(n) cursor walk — map each row to its slice of field_seps
@@ -286,11 +297,11 @@ pub fn parse_csv_parallel_boundaries_multi_sep(
     }
 
     if row_ranges.is_empty() {
-        return Vec::new();
+        return Ok(ScannedBoundaries::well_formed(Vec::new()));
     }
 
     // Phase 3: Parallel boundary extraction
-    run_parallel(|| {
+    let rows = run_parallel(|| {
         row_ranges
             .into_par_iter()
             .filter_map(|(rs, re, sep_lo, sep_hi)| {
@@ -315,6 +326,11 @@ pub fn parse_csv_parallel_boundaries_multi_sep(
                 }
             })
             .collect()
+    });
+
+    Ok(ScannedBoundaries {
+        rows,
+        violation: idx.violation,
     })
 }
 
@@ -339,7 +355,7 @@ mod tests {
             input.extend_from_slice(format!("{},{},{}\n", i, i + 1, i + 2).as_bytes());
         }
 
-        let rows = parse_csv_parallel(&input);
+        let rows = parse_csv_parallel(&input).expect("test input fits the structural index");
         assert_eq!(rows.len(), 1000);
         assert_eq!(rows[0], vec![b"0".to_vec(), b"1".to_vec(), b"2".to_vec()]);
         assert_eq!(

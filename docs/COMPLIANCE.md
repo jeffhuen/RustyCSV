@@ -1,6 +1,9 @@
 # RustyCSV Compliance & Validation
 
-RustyCSV takes correctness seriously. With **464 tests** across multiple test suites, including industry-standard validation suites used by CSV parsers across multiple languages, RustyCSV is one of the most thoroughly tested CSV libraries available for Elixir.
+RustyCSV takes correctness seriously. With **484 ExUnit tests** plus **131 Rust
+tests**, including industry-standard validation suites used by CSV parsers
+across multiple languages, RustyCSV is one of the most thoroughly tested CSV
+libraries available for Elixir.
 
 This document describes RFC 4180 compliance and the validation methodology.
 
@@ -166,44 +169,101 @@ end
 
 ## NimbleCSV Compatibility
 
-RustyCSV is designed as a drop-in replacement for NimbleCSV. Compatibility is verified by:
+RustyCSV targets the latest published NimbleCSV release, currently
+[v1.3.0](https://hex.pm/packages/nimble_csv/1.3.0). Compatibility is checked
+against both the
+[v1.3.0 source tests](https://github.com/dashbitco/nimble_csv/blob/v1.3.0/test/nimble_csv_test.exs)
+and [current master](https://github.com/dashbitco/nimble_csv), with the
+[upstream changelog](https://github.com/dashbitco/nimble_csv/blob/master/CHANGELOG.md)
+reviewed for behavior changes.
 
-1. **API compatibility tests** - All NimbleCSV API functions work identically
-2. **Output matching** - `dump_to_iodata/1` produces identical output to NimbleCSV
-3. **Round-trip tests** - Parse → dump → parse produces identical data
-4. **Full-file validation** - 100K-row CSV parsed through both libraries produces identical row-by-row output
+Compatibility is verified through:
+
+1. **API compatibility tests** - NimbleCSV's public parser/dumper functions and
+   original `options/0` values.
+2. **Output matching** - Encoded bytes, top-level row count, row order, BOM, and
+   list-shaped row iodata.
+3. **Round-trip tests** - Parse → dump → parse produces identical data.
+4. **Full-file validation** - 100K-row CSV parsed through both libraries
+   produces identical row-by-row output.
 
 **Test file:** `test/nimble_csv_compat_test.exs`
 
 ```elixir
-# Verify dump output matches NimbleCSV exactly
+# Verify public dump behavior without depending on private iodata nesting
 test "dump output matches NimbleCSV" do
   data = [["a", "b"], ["1", "2"]]
-  assert RustyCSV.RFC4180.dump_to_iodata(data) ==
-         NimbleCSV.RFC4180.dump_to_iodata(data)
+  rusty = RustyCSV.RFC4180.dump_to_iodata(data)
+  nimble = NimbleCSV.RFC4180.dump_to_iodata(data)
+
+  assert length(rusty) == length(nimble)
+  assert IO.iodata_to_binary(rusty) == IO.iodata_to_binary(nimble)
 end
 ```
 
-### Known Behavioral Differences
+### Upstream Suite Verification
 
-Any input NimbleCSV accepts, RustyCSV also accepts with identical output. Two edge cases differ:
+The upstream suite is loaded from the Git tag or commit, its `NimbleCSV`
+namespace is mechanically replaced with `RustyCSV`, and it is compiled in
+memory against the force-rebuilt local NIF.
 
-**1. Unquoted fields containing double-quote characters**
+Two runs are recorded:
 
-Input: ` "a",b\n` (space before quote)
+- **Literal** keeps every upstream assertion unchanged.
+- **Semantic** removes only the expected message string argument from six
+  `assert_raise` calls. The CSV inputs, functions called, exception type, and
+  production RustyCSV code remain unchanged.
 
-| Parser | Behavior |
-|--------|----------|
-| NimbleCSV | Raises `ParseError` |
-| RustyCSV | Parses as `[" \"a\"", "b"]` |
+| Upstream source | Literal | Semantic |
+|-----------------|---------|----------|
+| v1.3.0 tag | 17/21 | 21/21 |
+| master at `8cc4e68151975e5ff6eb1ad4a738a728bcb17a1e` | 19/23 | 23/23 |
 
-Both behaviors are defensible for malformed input. NimbleCSV treats any `"` as significant. RustyCSV treats a field as quoted only if it starts with the escape character, matching Python's `csv` module and Go's `encoding/csv` (with `LazyQuotes`).
+The four literal failures are message-string differences only. The temporary
+semantic transformation exists only in the test process; no compatibility
+shim or raw-input formatter is written to the repository or shipped.
 
-**2. `parse_stream/2` with non-line-delimited chunks**
+### Parse Error Data Policy
+
+NimbleCSV includes the offending CSV line in some `ParseError` messages.
+RustyCSV intentionally does not. CSV may contain credentials, personal data, or
+very large fields, and exceptions are commonly forwarded to logs and error
+trackers.
+
+RustyCSV errors therefore contain a stable category and byte position, never
+field contents. Synthetic CSV content may appear in tests, but real user
+fixtures must be scrubbed. This is required by
+[Rule 21](../.claude/rules/rust_programming.md) and is an intentional security
+difference, not an unfinished parity item.
+
+Temporarily changing production errors to include raw CSV would test behavior
+that will not ship and risks committing a data leak. Future parity checks should
+repeat the in-memory semantic run instead.
+
+### Iodata Shape
+
+NimbleCSV builds nested iodata per field. RustyCSV returns one list-wrapped
+binary per row. The documented/public behavior matches:
+
+- the outer list has one element per input row (plus a BOM element when enabled),
+- each row is list-shaped iodata,
+- row order and encoded bytes are identical,
+- `length/1`, row zipping, and `IO.iodata_to_binary/1` behave compatibly.
+
+The deeper per-field term tree is an implementation detail of iodata and is not
+replicated; doing so would add one BEAM term per field and separator without
+changing the callback contract.
+
+### Other Intentional Extensions
+
+**`parse_stream/2` with non-line-delimited chunks**
 
 The two libraries use different streaming architectures. NimbleCSV's `parse_stream` expects each element of the input enumerable to be a complete line. RustyCSV's streaming parser accepts arbitrary chunk boundaries because the Rust NIF maintains parse state across `feed()` calls.
 
 This difference is invisible for the standard use case (`File.stream! |> parse_stream`), where both produce identical output. It only surfaces when manually constructing a stream of non-line-delimited binary chunks.
+
+RustyCSV also exposes strategy selection, headers-to-maps, and `strict: false`
+as extensions. Strict parsing remains the default.
 
 ---
 
@@ -240,22 +300,16 @@ test/fixtures/
 
 ## Test Summary
 
-| Suite | Tests | Purpose |
-|-------|-------|---------|
-| Core tests | 36 | Basic functionality and NimbleCSV compatibility |
-| csv-spectrum | 17 | Industry acid test |
-| csv-test-data | 23 | RFC 4180 compliance |
-| Edge cases | 53 | Stress testing and malformed input |
-| Encoding | 20 | UTF-16, UTF-32, Latin-1 conversion |
-| Multi-separator | 19 | Multiple single-byte separator support |
-| Multi-byte separator | 13 | Multi-byte separator support (`::`, `||`, mixed) |
-| Multi-byte escape | 12 | Multi-byte escape support (`$$`) |
-| Native API | 40 | NIF-level separator/escape encoding |
-| Headers-to-maps | 97 | `headers:` option, cross-strategy consistency, stream parity |
-| Custom newlines | 18 | Custom newline parsing and streaming |
-| Streaming safety | 12 | Buffer overflow, mutex poisoning, concurrent access |
-| Concurrent access | 7 | Multi-process streaming safety |
-| **Total** | **464** | |
+| Gate | Result |
+|------|--------|
+| Rust unit tests | 120 passed |
+| Rust conformance tests | 11 passed |
+| ExUnit | 484 passed, including 5 properties |
+| NimbleCSV v1.3.0 semantic suite | 21/21 passed |
+| NimbleCSV master semantic suite | 23/23 passed |
+| `cargo clippy -D warnings` | Passed |
+| `mix credo --strict` | Passed |
+| `mix dialyzer` | Passed |
 
 ---
 

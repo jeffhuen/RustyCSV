@@ -51,8 +51,13 @@ defmodule EdgeCasesTest do
 
     test "quoted field with extra whitespace around quotes" do
       # Space before/after the quoted region is preserved as literal characters —
-      # the field is not inside quotes, so no quote-stripping occurs.
-      assert CSV.parse_string(" \"hello\" \n", skip_headers: false) == [[" \"hello\" "]]
+      # the field is not inside quotes, so it is only accepted in lenient mode.
+      assert_raise RustyCSV.ParseError, fn ->
+        CSV.parse_string(" \"hello\" \n", skip_headers: false)
+      end
+
+      assert CSV.parse_string(" \"hello\" \n", skip_headers: false, strict: false) ==
+               [[" \"hello\" "]]
     end
 
     test "tabs as whitespace" do
@@ -250,20 +255,28 @@ defmodule EdgeCasesTest do
 
   describe "quoted field edge cases" do
     test "quote at start of unquoted field" do
-      # Ambiguous - could be start of quoted field or literal quote
-      result = CSV.parse_string("\"abc,def\n", skip_headers: false)
-      assert is_list(result)
+      assert_raise RustyCSV.ParseError, fn ->
+        CSV.parse_string("\"abc,def\n", skip_headers: false)
+      end
+
+      assert is_list(CSV.parse_string("\"abc,def\n", skip_headers: false, strict: false))
     end
 
     test "quote in middle of unquoted field" do
-      result = CSV.parse_string("ab\"cd,ef\n", skip_headers: false)
-      # Most parsers treat this as literal quote in unquoted field
+      assert_raise RustyCSV.ParseError, fn ->
+        CSV.parse_string("ab\"cd,ef\n", skip_headers: false)
+      end
+
+      result = CSV.parse_string("ab\"cd,ef\n", skip_headers: false, strict: false)
       assert hd(hd(result)) =~ "ab"
     end
 
     test "quote at end of unquoted field" do
-      result = CSV.parse_string("abc\",def\n", skip_headers: false)
-      assert is_list(result)
+      assert_raise RustyCSV.ParseError, fn ->
+        CSV.parse_string("abc\",def\n", skip_headers: false)
+      end
+
+      assert is_list(CSV.parse_string("abc\",def\n", skip_headers: false, strict: false))
     end
 
     test "adjacent quoted fields" do

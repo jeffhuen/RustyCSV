@@ -1,10 +1,11 @@
-/// Custom newline support for CSV parsing.
+//! Custom newline support for CSV parsing.
+
+/// A set of newline patterns to recognise when splitting rows.
 ///
 /// When `is_default` is true, the standard \r\n and \n handling is used
 /// (SIMD-optimized paths). When false, the general byte-by-byte parser
 /// checks against the custom patterns.
-
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 #[must_use]
 pub struct Newlines {
     /// Newline patterns sorted longest-first for greedy matching.

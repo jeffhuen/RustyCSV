@@ -1,10 +1,10 @@
 #![feature(portable_simd)]
-// RustyCSV - Fast CSV parsing with multiple strategies
-//
-// NIF safety: no unwrap/expect in production code. Fallible paths use match + early return.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
-//
-// Strategies:
+//! RustyCSV - Fast CSV parsing with multiple strategies
+//!
+//! NIF safety: no unwrap/expect in production code. Fallible paths use match + early return.
+//!
+//! Strategies:
 // A/B/C/F: SIMD boundary scan + hybrid sub-binary term builder (parse_string,
 //          parse_string_fast, parse_string_indexed, parse_string_zero_copy).
 //          These are functionally equivalent — all use the same code path.
@@ -23,6 +23,10 @@ mod atoms {
         mutex_poisoned,
         buffer_overflow,
         input_too_large,
+        malformed_csv,
+        unexpected_quote,
+        trailing_garbage,
+        unterminated_quote,
         non_binary_field,
     }
 }
@@ -32,15 +36,10 @@ mod resource;
 pub mod strategy;
 mod term;
 
-/// Maximum input size for batch parsing (u32::MAX = 4 GiB).
-/// The SIMD structural scanner uses u32 positions; inputs larger than
-/// this would silently produce incorrect results due to truncation.
-const MAX_BATCH_INPUT_SIZE: usize = u32::MAX as usize;
-
 /// Returns `true` when `len` exceeds the batch parsing size limit.
 #[inline]
 fn exceeds_batch_limit(len: usize) -> bool {
-    len > MAX_BATCH_INPUT_SIZE
+    len > core::MAX_INPUT_SIZE
 }
 
 /// Check whether `input` exceeds the batch parsing size limit.
@@ -128,7 +127,7 @@ fn single_byte_seps(separators: &Separators) -> Vec<u8> {
     separators.patterns.iter().map(|p| p[0]).collect()
 }
 
-use core::Newlines;
+use core::{InputTooLarge, Newlines, ScannedBoundaries, Violation};
 
 /// Decode newlines from a Term.
 /// Accepts: atom :default → default newlines, or list of binaries → custom newlines
@@ -176,6 +175,50 @@ use term::{
     boundaries_to_term_hybrid_general, owned_rows_to_term,
 };
 
+fn input_too_large_term<'a>(env: Env<'a>) -> Term<'a> {
+    (atoms::error(), atoms::input_too_large()).encode(env)
+}
+
+fn malformed_csv_term<'a>(env: Env<'a>, violation: Violation) -> Term<'a> {
+    let category = match violation {
+        Violation::UnexpectedQuote(_) => atoms::unexpected_quote(),
+        Violation::TrailingGarbage(_) => atoms::trailing_garbage(),
+        Violation::UnterminatedQuote(_) => atoms::unterminated_quote(),
+    };
+    (
+        atoms::error(),
+        (atoms::malformed_csv(), category, violation.position()),
+    )
+        .encode(env)
+}
+
+fn scanned_rows<'a>(
+    env: Env<'a>,
+    scanned: Result<ScannedBoundaries, InputTooLarge>,
+    strict: bool,
+) -> Result<Vec<Vec<(usize, usize)>>, Term<'a>> {
+    let scanned = scanned.map_err(|_| input_too_large_term(env))?;
+    if strict {
+        if let Some(violation) = scanned.violation {
+            return Err(malformed_csv_term(env, violation));
+        }
+    }
+    Ok(scanned.rows)
+}
+
+fn scanned_boundaries_to_term<'a>(
+    env: Env<'a>,
+    input: Binary<'a>,
+    scanned: Result<ScannedBoundaries, InputTooLarge>,
+    escape: &Escape,
+    strict: bool,
+) -> Term<'a> {
+    match scanned_rows(env, scanned, strict) {
+        Ok(rows) => dispatch_boundaries_to_term(env, input, rows, escape),
+        Err(error) => error,
+    }
+}
+
 // ============================================================================
 // Allocator Configuration
 // ============================================================================
@@ -197,9 +240,19 @@ mod tracking {
     #[cfg(not(feature = "mimalloc"))]
     static UNDERLYING: std::alloc::System = std::alloc::System;
 
+    // SAFETY: `GlobalAlloc` requires that a returned block be valid for the
+    // requested layout, that the allocator never unwind, and that `dealloc`
+    // receive a pointer and layout previously produced by this same allocator.
+    // Every one of those obligations is discharged by `UNDERLYING`, which is
+    // either mimalloc or the system allocator; this type only wraps those calls
+    // in relaxed atomic counters. The counters are statistics rather than
+    // allocator state, so a torn reading skews a profiling number and cannot
+    // affect memory safety, and neither counter path can panic or unwind.
     unsafe impl GlobalAlloc for TrackingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let ptr = UNDERLYING.alloc(layout);
+            // SAFETY: `layout` is forwarded unchanged from our caller, who
+            // already owes `GlobalAlloc::alloc` a non-zero-size layout.
+            let ptr = unsafe { UNDERLYING.alloc(layout) };
             if !ptr.is_null() {
                 let current = ALLOCATED.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
                 let mut peak = PEAK_ALLOCATED.load(Ordering::Relaxed);
@@ -220,7 +273,12 @@ mod tracking {
 
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
             ALLOCATED.fetch_sub(layout.size(), Ordering::Relaxed);
-            UNDERLYING.dealloc(ptr, layout)
+            // SAFETY: `ptr` and `layout` are forwarded unchanged from our
+            // caller, who already owes `GlobalAlloc::dealloc` a pointer this
+            // allocator produced for exactly this layout. Every such pointer
+            // came from `UNDERLYING::alloc` above, so `UNDERLYING` is the
+            // correct allocator to hand it back to.
+            unsafe { UNDERLYING.dealloc(ptr, layout) }
         }
     }
 }
@@ -301,8 +359,11 @@ fn parse_string<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
     }
-    let boundaries = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
-    Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
+    let scanned = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
+    let escape = Escape { bytes: vec![b'"'] };
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, true,
+    ))
 }
 
 /// Parse CSV with configurable separator(s), escape, and newlines.
@@ -315,6 +376,7 @@ fn parse_string_with_config<'a>(
     sep_term: Term<'a>,
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
+    strict: bool,
 ) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
@@ -322,8 +384,10 @@ fn parse_string_with_config<'a>(
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
-    let boundaries = dispatch_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
-    Ok(dispatch_boundaries_to_term(env, input, boundaries, &escape))
+    let scanned = dispatch_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, strict,
+    ))
 }
 
 // ============================================================================
@@ -340,8 +404,11 @@ fn parse_string_fast<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'a>>
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
     }
-    let boundaries = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
-    Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
+    let scanned = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
+    let escape = Escape { bytes: vec![b'"'] };
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, true,
+    ))
 }
 
 /// Parse using SIMD with configurable separator(s), escape, and newlines.
@@ -354,6 +421,7 @@ fn parse_string_fast_with_config<'a>(
     sep_term: Term<'a>,
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
+    strict: bool,
 ) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
@@ -361,8 +429,10 @@ fn parse_string_fast_with_config<'a>(
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
-    let boundaries = dispatch_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
-    Ok(dispatch_boundaries_to_term(env, input, boundaries, &escape))
+    let scanned = dispatch_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, strict,
+    ))
 }
 
 // ============================================================================
@@ -379,8 +449,11 @@ fn parse_string_indexed<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<'
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
     }
-    let boundaries = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
-    Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
+    let scanned = parse_csv_boundaries_with_config(input.as_slice(), b',', b'"');
+    let escape = Escape { bytes: vec![b'"'] };
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, true,
+    ))
 }
 
 /// Parse using two-phase with configurable separator(s), escape, and newlines.
@@ -393,6 +466,7 @@ fn parse_string_indexed_with_config<'a>(
     sep_term: Term<'a>,
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
+    strict: bool,
 ) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
@@ -400,8 +474,10 @@ fn parse_string_indexed_with_config<'a>(
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
-    let boundaries = dispatch_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
-    Ok(dispatch_boundaries_to_term(env, input, boundaries, &escape))
+    let scanned = dispatch_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, strict,
+    ))
 }
 
 // ============================================================================
@@ -420,6 +496,7 @@ fn streaming_new_with_config<'a>(
     sep_term: Term<'a>,
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
+    strict: bool,
 ) -> NifResult<StreamingParserRef> {
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
@@ -431,6 +508,7 @@ fn streaming_new_with_config<'a>(
                 separators.patterns,
                 escape.bytes,
                 newlines,
+                strict,
             ),
         ));
     }
@@ -439,26 +517,43 @@ fn streaming_new_with_config<'a>(
         let esc = escape.bytes[0];
         let sep_bytes = single_byte_seps(&separators);
         if sep_bytes.len() == 1 {
-            ResourceArc::new(StreamingParserResource::with_config(sep_bytes[0], esc))
+            ResourceArc::new(StreamingParserResource::with_config(
+                sep_bytes[0],
+                esc,
+                strict,
+            ))
         } else {
-            ResourceArc::new(StreamingParserResource::with_multi_sep(&sep_bytes, esc))
+            ResourceArc::new(StreamingParserResource::with_multi_sep(
+                &sep_bytes, esc, strict,
+            ))
         }
     } else {
         ResourceArc::new(StreamingParserResource::with_general(
             separators.patterns,
             escape.bytes,
+            strict,
         ))
     })
 }
 
 /// Feed a chunk of data to the streaming parser
 #[rustler::nif(schedule = "DirtyCpu")]
-fn streaming_feed(parser: StreamingParserRef, chunk: Binary) -> NifResult<(usize, usize)> {
+fn streaming_feed<'a>(
+    env: Env<'a>,
+    parser: StreamingParserRef,
+    chunk: Binary,
+) -> NifResult<Term<'a>> {
+    let strict = parser.strict;
     let mut inner = lock_parser(&parser)?;
     inner
         .feed(chunk.as_slice())
         .map_err(|_| Error::RaiseTerm(Box::new(atoms::buffer_overflow())))?;
-    Ok((inner.available_rows(), inner.buffer_size()))
+    if strict {
+        if let Some(violation) = inner.violation() {
+            return Ok(malformed_csv_term(env, violation));
+        }
+    }
+    Ok((inner.available_rows(), inner.buffer_size()).encode(env))
 }
 
 /// Take up to `max` rows from the streaming parser
@@ -468,7 +563,13 @@ fn streaming_next_rows<'a>(
     parser: StreamingParserRef,
     max: usize,
 ) -> NifResult<Term<'a>> {
+    let strict = parser.strict;
     let mut inner = lock_parser(&parser)?;
+    if strict {
+        if let Some(violation) = inner.violation() {
+            return Ok(malformed_csv_term(env, violation));
+        }
+    }
     let rows = inner.take_rows(max);
     Ok(owned_rows_to_term(env, rows))
 }
@@ -476,8 +577,14 @@ fn streaming_next_rows<'a>(
 /// Finalize the streaming parser (get remaining partial row)
 #[rustler::nif(schedule = "DirtyCpu")]
 fn streaming_finalize<'a>(env: Env<'a>, parser: StreamingParserRef) -> NifResult<Term<'a>> {
+    let strict = parser.strict;
     let mut inner = lock_parser(&parser)?;
     let rows = inner.finalize();
+    if strict {
+        if let Some(violation) = inner.violation() {
+            return Ok(malformed_csv_term(env, violation));
+        }
+    }
     Ok(owned_rows_to_term(env, rows))
 }
 
@@ -511,7 +618,7 @@ fn dispatch_parallel_boundary_parse(
     separators: &Separators,
     escape: &Escape,
     newlines: &Newlines,
-) -> Vec<Vec<(usize, usize)>> {
+) -> Result<ScannedBoundaries, InputTooLarge> {
     if !newlines.is_default {
         return parse_csv_parallel_boundaries_general_with_newlines(
             bytes,
@@ -541,8 +648,11 @@ fn parse_string_parallel<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term<
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
     }
-    let boundaries = parse_csv_parallel_boundaries(input.as_slice());
-    Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
+    let scanned = parse_csv_parallel_boundaries(input.as_slice());
+    let escape = Escape { bytes: vec![b'"'] };
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, true,
+    ))
 }
 
 /// Parse CSV in parallel with configurable separator(s), escape, and newlines.
@@ -555,6 +665,7 @@ fn parse_string_parallel_with_config<'a>(
     sep_term: Term<'a>,
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
+    strict: bool,
 ) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
@@ -562,9 +673,11 @@ fn parse_string_parallel_with_config<'a>(
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
-    let boundaries =
+    let scanned =
         dispatch_parallel_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
-    Ok(dispatch_boundaries_to_term(env, input, boundaries, &escape))
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, strict,
+    ))
 }
 
 // ============================================================================
@@ -582,8 +695,11 @@ fn parse_string_zero_copy<'a>(env: Env<'a>, input: Binary<'a>) -> NifResult<Term
         return Ok(t);
     }
     let bytes = input.as_slice();
-    let boundaries = parse_csv_boundaries_with_config(bytes, b',', b'"');
-    Ok(boundaries_to_term_hybrid(env, input, boundaries, b'"'))
+    let scanned = parse_csv_boundaries_with_config(bytes, b',', b'"');
+    let escape = Escape { bytes: vec![b'"'] };
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, true,
+    ))
 }
 
 /// Parse CSV using zero-copy with configurable separator(s), escape, and newlines.
@@ -596,6 +712,7 @@ fn parse_string_zero_copy_with_config<'a>(
     sep_term: Term<'a>,
     esc_term: Term<'a>,
     newlines_term: Term<'a>,
+    strict: bool,
 ) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
@@ -603,41 +720,10 @@ fn parse_string_zero_copy_with_config<'a>(
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
     let newlines = decode_newlines(newlines_term)?;
-    let bytes = input.as_slice();
-
-    if !newlines.is_default {
-        let boundaries = parse_csv_boundaries_general_with_newlines(
-            bytes,
-            &separators.patterns,
-            &escape.bytes,
-            &newlines,
-        );
-        return Ok(boundaries_to_term_hybrid_general(
-            env,
-            input,
-            boundaries,
-            &escape.bytes,
-        ));
-    }
-
-    if is_all_single_byte(&separators, &escape) {
-        let esc = escape.bytes[0];
-        let sep_bytes = single_byte_seps(&separators);
-        let boundaries = if sep_bytes.len() == 1 {
-            parse_csv_boundaries_with_config(bytes, sep_bytes[0], esc)
-        } else {
-            parse_csv_boundaries_multi_sep(bytes, &sep_bytes, esc)
-        };
-        Ok(boundaries_to_term_hybrid(env, input, boundaries, esc))
-    } else {
-        let boundaries = parse_csv_boundaries_general(bytes, &separators.patterns, &escape.bytes);
-        Ok(boundaries_to_term_hybrid_general(
-            env,
-            input,
-            boundaries,
-            &escape.bytes,
-        ))
-    }
+    let scanned = dispatch_boundary_parse(input.as_slice(), &separators, &escape, &newlines);
+    Ok(scanned_boundaries_to_term(
+        env, input, scanned, &escape, strict,
+    ))
 }
 
 // ============================================================================
@@ -676,7 +762,7 @@ fn dispatch_boundary_parse(
     separators: &Separators,
     escape: &Escape,
     newlines: &Newlines,
-) -> Vec<Vec<(usize, usize)>> {
+) -> Result<ScannedBoundaries, InputTooLarge> {
     if !newlines.is_default {
         return parse_csv_boundaries_general_with_newlines(
             bytes,
@@ -788,7 +874,10 @@ fn boundary_row_to_key_terms<'a>(
 /// Parse CSV and return list of maps. Dispatches to strategy internally.
 ///
 /// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the NIF signature mirrors the stable Elixir argument list"
+)]
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_to_maps<'a>(
     env: Env<'a>,
@@ -799,6 +888,7 @@ fn parse_to_maps<'a>(
     strategy: Term<'a>,
     header_mode_term: Term<'a>,
     skip_first: bool,
+    strict: bool,
 ) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
@@ -812,7 +902,14 @@ fn parse_to_maps<'a>(
 
     match strategy_str.as_str() {
         "basic" | "simd" | "indexed" | "zero_copy" => {
-            let all_boundaries = dispatch_boundary_parse(bytes, &separators, &escape, &newlines);
+            let all_boundaries = match scanned_rows(
+                env,
+                dispatch_boundary_parse(bytes, &separators, &escape, &newlines),
+                strict,
+            ) {
+                Ok(rows) => rows,
+                Err(error) => return Ok(error),
+            };
             if all_boundaries.is_empty() {
                 return Ok(Term::list_new_empty(env));
             }
@@ -848,6 +945,10 @@ fn parse_to_maps<'a>(
 /// Parallel variant for parse_to_maps on dirty CPU scheduler.
 ///
 /// Returns `{:error, :input_too_large}` if the input exceeds 4 GiB.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the NIF signature mirrors the stable Elixir argument list"
+)]
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_to_maps_parallel<'a>(
     env: Env<'a>,
@@ -857,6 +958,7 @@ fn parse_to_maps_parallel<'a>(
     newlines_term: Term<'a>,
     header_mode_term: Term<'a>,
     skip_first: bool,
+    strict: bool,
 ) -> NifResult<Term<'a>> {
     if let Err(t) = guard_input_size(env, input.as_slice()) {
         return Ok(t);
@@ -867,7 +969,14 @@ fn parse_to_maps_parallel<'a>(
     let header_mode = decode_header_mode(header_mode_term)?;
     let bytes = input.as_slice();
 
-    let all_boundaries = dispatch_parallel_boundary_parse(bytes, &separators, &escape, &newlines);
+    let all_boundaries = match scanned_rows(
+        env,
+        dispatch_parallel_boundary_parse(bytes, &separators, &escape, &newlines),
+        strict,
+    ) {
+        Ok(rows) => rows,
+        Err(error) => return Ok(error),
+    };
 
     if all_boundaries.is_empty() {
         return Ok(Term::list_new_empty(env));
@@ -1057,15 +1166,17 @@ impl PostProcess {
     }
 }
 
-/// Encode rows to CSV, returning iodata wrapping a single flat binary.
+fn new_binary_term<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
+    let mut binary = NewBinary::new(env, bytes.len());
+    binary.as_mut_slice().copy_from_slice(bytes);
+    binary.into()
+}
+
+/// Encode rows to CSV, returning one binary per row as iodata.
 ///
-/// Architecture: writes all output into a single Vec<u8> buffer, then wraps it
-/// as one NewBinary. Clean fields are copied directly; dirty fields (needing
-/// quoting) are written with doubled escapes. The result is `[<<binary>>]` —
-/// a one-element iodata list containing the entire CSV output.
-///
-/// This minimizes BEAM-side allocation (one binary, one list cell) and avoids
-/// per-field Term construction overhead at the cost of copying clean field bytes.
+/// Each row is encoded into a reusable buffer and copied into one NewBinary.
+/// This preserves NimbleCSV's top-level row shape without constructing a BEAM
+/// term for every field and separator.
 ///
 /// Formula escaping and non-UTF-8 encoding are handled via the PostProcess enum:
 /// - None: UTF-8, no formula (fast path)
@@ -1135,7 +1246,7 @@ fn encode_string<'a>(
 }
 
 /// PostProcess::None — UTF-8, no formula.
-/// Flat Vec<u8> buffer → single NewBinary for minimal peak memory.
+/// Reusable Vec<u8> row buffer → one NewBinary per row.
 fn encode_string_none<'a>(
     env: Env<'a>,
     rows_iter: ListIterator<'a>,
@@ -1146,7 +1257,8 @@ fn encode_string_none<'a>(
 ) -> NifResult<Term<'a>> {
     use strategy::encode::{write_quoted_field, write_quoted_field_general};
 
-    let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+    let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    let mut row_terms = Vec::new();
 
     if is_all_single_byte(separators, escape) {
         let esc = escape.bytes[0];
@@ -1179,6 +1291,8 @@ fn encode_string_none<'a>(
                 }
             }
             buf.extend_from_slice(line_separator);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     } else {
         let sep_pattern = &separators.patterns[0];
@@ -1204,17 +1318,16 @@ fn encode_string_none<'a>(
                 }
             }
             buf.extend_from_slice(line_separator);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     }
 
-    let mut new_bin = NewBinary::new(env, buf.len());
-    new_bin.as_mut_slice().copy_from_slice(&buf);
-    let bin_term: Term<'a> = new_bin.into();
-    Ok(bin_term)
+    Ok(row_terms.encode(env))
 }
 
 /// PostProcess::FormulaOnly — UTF-8 + formula escaping.
-/// Flat Vec<u8> buffer → single NewBinary.
+/// Reusable Vec<u8> row buffer → one NewBinary per row.
 ///
 /// NimbleCSV semantics:
 /// - Formula triggered + clean field → prefix ++ field (no quotes)
@@ -1233,7 +1346,8 @@ fn encode_string_formula<'a>(
         write_quoted_field_inner_general,
     };
 
-    let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+    let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    let mut row_terms = Vec::new();
 
     if is_all_single_byte(separators, escape) {
         let esc = escape.bytes[0];
@@ -1277,6 +1391,8 @@ fn encode_string_formula<'a>(
                 }
             }
             buf.extend_from_slice(line_separator);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     } else {
         let sep_pattern = &separators.patterns[0];
@@ -1315,17 +1431,16 @@ fn encode_string_formula<'a>(
                 }
             }
             buf.extend_from_slice(line_separator);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     }
 
-    let mut new_bin = NewBinary::new(env, buf.len());
-    new_bin.as_mut_slice().copy_from_slice(&buf);
-    let bin_term: Term<'a> = new_bin.into();
-    Ok(bin_term)
+    Ok(row_terms.encode(env))
 }
 
 /// PostProcess::EncodingOnly — non-UTF-8, no formula.
-/// Flat Vec<u8> buffer with scratch buffer for quoting → single NewBinary.
+/// Reusable Vec<u8> row buffer with scratch space → one NewBinary per row.
 fn encode_string_encoding<'a>(
     env: Env<'a>,
     rows_iter: ListIterator<'a>,
@@ -1338,8 +1453,9 @@ fn encode_string_encoding<'a>(
     use strategy::encode::{write_quoted_field, write_quoted_field_general};
     use strategy::encoding::encode_utf8_extend;
 
-    let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+    let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    let mut row_terms = Vec::new();
 
     // Pre-encode separator and line_separator into buf-compatible bytes
     let mut sep_encoded: Vec<u8> = Vec::new();
@@ -1382,6 +1498,8 @@ fn encode_string_encoding<'a>(
                 encode_utf8_extend(&mut buf, utf8_src, target);
             }
             buf.extend_from_slice(&ls_encoded);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     } else {
         let sep_pattern = &separators.patterns[0];
@@ -1413,17 +1531,16 @@ fn encode_string_encoding<'a>(
                 encode_utf8_extend(&mut buf, utf8_src, target);
             }
             buf.extend_from_slice(&ls_encoded);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     }
 
-    let mut new_bin = NewBinary::new(env, buf.len());
-    new_bin.as_mut_slice().copy_from_slice(&buf);
-    let bin_term: Term<'a> = new_bin.into();
-    Ok(bin_term)
+    Ok(row_terms.encode(env))
 }
 
 /// PostProcess::Full — both formula escaping and non-UTF-8 encoding.
-/// Flat Vec<u8> buffer with scratch buffer → single NewBinary.
+/// Reusable Vec<u8> row buffer with scratch space → one NewBinary per row.
 #[allow(clippy::too_many_arguments)]
 fn encode_string_full<'a>(
     env: Env<'a>,
@@ -1441,8 +1558,9 @@ fn encode_string_full<'a>(
     };
     use strategy::encoding::encode_utf8_extend;
 
-    let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+    let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    let mut row_terms = Vec::new();
 
     let mut sep_encoded: Vec<u8> = Vec::new();
     encode_utf8_extend(&mut sep_encoded, &separators.patterns[0], target);
@@ -1500,6 +1618,8 @@ fn encode_string_full<'a>(
                 }
             }
             buf.extend_from_slice(&ls_encoded);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     } else {
         let sep_pattern = &separators.patterns[0];
@@ -1545,22 +1665,20 @@ fn encode_string_full<'a>(
                 }
             }
             buf.extend_from_slice(&ls_encoded);
+            row_terms.push(new_binary_term(env, &buf));
+            buf.clear();
         }
     }
 
-    let mut new_bin = NewBinary::new(env, buf.len());
-    new_bin.as_mut_slice().copy_from_slice(&buf);
-    let bin_term: Term<'a> = new_bin.into();
-    Ok(bin_term)
+    Ok(row_terms.encode(env))
 }
 
 /// Encode rows to CSV in parallel using rayon, returning iodata (list of binaries).
 ///
 /// Architecture:
 /// - Phase 1 (main thread): Walk Erlang lists, copy field bytes into owned Vecs
-/// - Phase 2 (rayon): Parallel CSV encoding — each chunk produces a flat Vec<u8>
-///   with formula prefixes applied. If encoding != UTF-8, convert entire chunk.
-/// - Phase 3 (main thread): Wrap each chunk as a NewBinary, return as iodata list
+/// - Phase 2 (rayon): Parallel CSV encoding — each row produces a flat Vec<u8>
+/// - Phase 3 (main thread): Wrap each row as a NewBinary, preserving row order
 ///
 /// Only supports single-byte separator/escape (the common case for parallel workloads).
 /// Falls back to BadArg for multi-byte separator/escape — callers should use
@@ -1582,7 +1700,7 @@ fn encode_string_parallel<'a>(
         field_needs_quoting_simd, write_quoted_field, write_quoted_field_inner,
     };
     use strategy::encoding::encode_utf8_to_target;
-    use strategy::parallel::{recommended_threads, run_parallel};
+    use strategy::parallel::run_parallel;
 
     let separators = decode_separators(sep_term)?;
     let escape = decode_escape(esc_term)?;
@@ -1625,9 +1743,6 @@ fn encode_string_parallel<'a>(
         return Ok(Term::list_new_empty(env));
     }
 
-    // Phase 2: Parallel CSV encoding via rayon
-    let chunk_size = (all_rows.len() / recommended_threads()).max(256);
-
     // Pre-encode separator and line_separator for non-UTF-8
     let sep_bytes_encoded: Vec<u8> = if needs_encoding {
         encode_utf8_to_target(&[dump_sep], encoding)
@@ -1640,116 +1755,100 @@ fn encode_string_parallel<'a>(
         line_separator.clone()
     };
 
-    let chunks: Vec<Vec<u8>> = run_parallel(|| {
+    let encoded_rows: Vec<Vec<u8>> = run_parallel(|| {
         all_rows
-            .par_chunks(chunk_size)
-            .map(|chunk_rows| {
-                let mut out = Vec::with_capacity(chunk_rows.len() * 128);
-                for row in chunk_rows {
-                    for (i, field) in row.iter().enumerate() {
-                        if i > 0 {
-                            if needs_encoding {
-                                out.extend_from_slice(&sep_bytes_encoded);
-                            } else {
-                                out.push(dump_sep);
-                            }
-                        }
-
-                        // Check formula trigger
-                        let formula_prefix: Option<&[u8]> = if has_formula && !field.is_empty() {
-                            let first = field[0];
-                            formula_rules
-                                .iter()
-                                .find(|(trigger, _)| *trigger == first)
-                                .map(|(_, replacement)| replacement.as_slice())
+            .par_iter()
+            .map(|row| {
+                let mut out = Vec::with_capacity(128);
+                for (i, field) in row.iter().enumerate() {
+                    if i > 0 {
+                        if needs_encoding {
+                            out.extend_from_slice(&sep_bytes_encoded);
                         } else {
-                            None
-                        };
-
-                        let needs_quoting =
-                            field_needs_quoting_simd(field, dump_sep, esc, &reserved);
-
-                        if let Some(prefix) = formula_prefix {
-                            if needs_quoting {
-                                if needs_encoding {
-                                    // [encoded_esc, raw_prefix, encoded_inner, encoded_esc]
-                                    let encoded_esc = encode_utf8_to_target(&[esc], encoding);
-                                    let mut inner_buf = Vec::with_capacity(field.len() + 8);
-                                    write_quoted_field_inner(&mut inner_buf, field, esc);
-                                    let encoded_inner = encode_utf8_to_target(&inner_buf, encoding);
-                                    out.extend_from_slice(&encoded_esc);
-                                    out.extend_from_slice(prefix);
-                                    out.extend_from_slice(&encoded_inner);
-                                    out.extend_from_slice(&encoded_esc);
-                                } else {
-                                    // FormulaOnly: prefix inside quotes
-                                    out.push(esc);
-                                    out.extend_from_slice(prefix);
-                                    write_quoted_field_inner(&mut out, field, esc);
-                                    out.push(esc);
-                                }
-                            } else if needs_encoding {
-                                // Clean + formula + encoding: prefix raw, field encoded
-                                out.extend_from_slice(prefix);
-                                let encoded = encode_utf8_to_target(field, encoding);
-                                out.extend_from_slice(&encoded);
-                            } else {
-                                // Clean + formula, no encoding
-                                out.extend_from_slice(prefix);
-                                out.extend_from_slice(field);
-                            }
-                            continue;
+                            out.push(dump_sep);
                         }
+                    }
 
+                    // Check formula trigger
+                    let formula_prefix: Option<&[u8]> = if has_formula && !field.is_empty() {
+                        let first = field[0];
+                        formula_rules
+                            .iter()
+                            .find(|(trigger, _)| *trigger == first)
+                            .map(|(_, replacement)| replacement.as_slice())
+                    } else {
+                        None
+                    };
+
+                    let needs_quoting = field_needs_quoting_simd(field, dump_sep, esc, &reserved);
+
+                    if let Some(prefix) = formula_prefix {
                         if needs_quoting {
-                            let mut buf = Vec::with_capacity(field.len() + 8);
-                            write_quoted_field(&mut buf, field, esc);
                             if needs_encoding {
-                                let encoded = encode_utf8_to_target(&buf, encoding);
-                                out.extend_from_slice(&encoded);
+                                // [encoded_esc, raw_prefix, encoded_inner, encoded_esc]
+                                let encoded_esc = encode_utf8_to_target(&[esc], encoding);
+                                let mut inner_buf = Vec::with_capacity(field.len() + 8);
+                                write_quoted_field_inner(&mut inner_buf, field, esc);
+                                let encoded_inner = encode_utf8_to_target(&inner_buf, encoding);
+                                out.extend_from_slice(&encoded_esc);
+                                out.extend_from_slice(prefix);
+                                out.extend_from_slice(&encoded_inner);
+                                out.extend_from_slice(&encoded_esc);
                             } else {
-                                out.extend_from_slice(&buf);
+                                // FormulaOnly: prefix inside quotes
+                                out.push(esc);
+                                out.extend_from_slice(prefix);
+                                write_quoted_field_inner(&mut out, field, esc);
+                                out.push(esc);
                             }
                         } else if needs_encoding {
-                            // Encode directly — no clone needed
+                            // Clean + formula + encoding: prefix raw, field encoded
+                            out.extend_from_slice(prefix);
                             let encoded = encode_utf8_to_target(field, encoding);
                             out.extend_from_slice(&encoded);
                         } else {
+                            // Clean + formula, no encoding
+                            out.extend_from_slice(prefix);
                             out.extend_from_slice(field);
                         }
+                        continue;
                     }
-                    out.extend_from_slice(&ls_encoded);
+
+                    if needs_quoting {
+                        let mut buf = Vec::with_capacity(field.len() + 8);
+                        write_quoted_field(&mut buf, field, esc);
+                        if needs_encoding {
+                            let encoded = encode_utf8_to_target(&buf, encoding);
+                            out.extend_from_slice(&encoded);
+                        } else {
+                            out.extend_from_slice(&buf);
+                        }
+                    } else if needs_encoding {
+                        let encoded = encode_utf8_to_target(field, encoding);
+                        out.extend_from_slice(&encoded);
+                    } else {
+                        out.extend_from_slice(field);
+                    }
                 }
+                out.extend_from_slice(&ls_encoded);
                 out
             })
             .collect()
     });
 
-    // Phase 3: Build iodata from chunk results
-    let chunk_terms: Vec<Term<'a>> = chunks
+    let row_terms: Vec<Term<'a>> = encoded_rows
         .into_iter()
-        .map(|chunk| {
-            let mut new_bin = NewBinary::new(env, chunk.len());
-            new_bin.as_mut_slice().copy_from_slice(&chunk);
-            let t: Term<'a> = new_bin.into();
-            t
-        })
+        .map(|row| new_binary_term(env, &row))
         .collect();
 
-    Ok(chunk_terms.encode(env))
+    Ok(row_terms.encode(env))
 }
 
 // ============================================================================
 // NIF Initialization
 // ============================================================================
 
-#[allow(non_local_definitions)]
-fn load(env: Env, _info: Term) -> bool {
-    let _ = rustler::resource!(StreamingParserResource, env);
-    true
-}
-
-rustler::init!("Elixir.RustyCSV.Native", load = load);
+rustler::init!("Elixir.RustyCSV.Native");
 
 #[cfg(test)]
 mod tests {
@@ -1772,6 +1871,6 @@ mod tests {
 
     #[test]
     fn max_batch_input_size_equals_u32_max() {
-        assert_eq!(MAX_BATCH_INPUT_SIZE, u32::MAX as usize);
+        assert_eq!(core::MAX_INPUT_SIZE, u32::MAX as usize);
     }
 }

@@ -52,7 +52,7 @@ defmodule RustyCSVTest do
   describe "options/0" do
     test "returns module configuration" do
       opts = CSV.options()
-      assert opts[:separator] == [","]
+      assert opts[:separator] == ","
       assert opts[:escape] == "\""
       assert opts[:strategy] == :simd
     end

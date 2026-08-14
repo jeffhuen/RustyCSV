@@ -1,9 +1,9 @@
-// ResourceArc wrapper for streaming parser
-//
-// This allows the streaming parser state to persist across NIF calls.
-// Supports both single-byte (fast path) and general (multi-byte) parsers.
+//! ResourceArc wrapper for streaming parser
+//!
+//! This allows the streaming parser state to persist across NIF calls.
+//! Supports both single-byte (fast path) and general (multi-byte) parsers.
 
-use crate::core::Newlines;
+use crate::core::{Newlines, Violation};
 use crate::strategy::{GeneralStreamingParser, GeneralStreamingParserNewlines, StreamingParser};
 use rustler::ResourceArc;
 use std::sync::Mutex;
@@ -64,6 +64,14 @@ impl StreamingParserEnum {
         }
     }
 
+    pub fn violation(&self) -> Option<Violation> {
+        match self {
+            StreamingParserEnum::SingleByte(p) => p.violation(),
+            StreamingParserEnum::General(p) => p.violation(),
+            StreamingParserEnum::GeneralNewlines(p) => p.violation(),
+        }
+    }
+
     pub fn finalize(&mut self) -> Vec<Vec<Vec<u8>>> {
         match self {
             StreamingParserEnum::SingleByte(p) => p.finalize(),
@@ -77,36 +85,44 @@ impl StreamingParserEnum {
 #[must_use]
 pub struct StreamingParserResource {
     pub inner: Mutex<StreamingParserEnum>,
+    pub strict: bool,
 }
+
+#[rustler::resource_impl]
+impl rustler::Resource for StreamingParserResource {}
 
 impl StreamingParserResource {
     pub fn new() -> Self {
         StreamingParserResource {
             inner: Mutex::new(StreamingParserEnum::SingleByte(StreamingParser::new())),
+            strict: true,
         }
     }
 
-    pub fn with_config(separator: u8, escape: u8) -> Self {
+    pub fn with_config(separator: u8, escape: u8, strict: bool) -> Self {
         StreamingParserResource {
             inner: Mutex::new(StreamingParserEnum::SingleByte(
                 StreamingParser::with_config(separator, escape),
             )),
+            strict,
         }
     }
 
-    pub fn with_multi_sep(separators: &[u8], escape: u8) -> Self {
+    pub fn with_multi_sep(separators: &[u8], escape: u8, strict: bool) -> Self {
         StreamingParserResource {
             inner: Mutex::new(StreamingParserEnum::SingleByte(
                 StreamingParser::with_multi_sep(separators, escape),
             )),
+            strict,
         }
     }
 
-    pub fn with_general(separators: Vec<Vec<u8>>, escape: Vec<u8>) -> Self {
+    pub fn with_general(separators: Vec<Vec<u8>>, escape: Vec<u8>, strict: bool) -> Self {
         StreamingParserResource {
             inner: Mutex::new(StreamingParserEnum::General(GeneralStreamingParser::new(
                 separators, escape,
             ))),
+            strict,
         }
     }
 
@@ -114,11 +130,13 @@ impl StreamingParserResource {
         separators: Vec<Vec<u8>>,
         escape: Vec<u8>,
         newlines: Newlines,
+        strict: bool,
     ) -> Self {
         StreamingParserResource {
             inner: Mutex::new(StreamingParserEnum::GeneralNewlines(
                 GeneralStreamingParserNewlines::new(separators, escape, newlines),
             )),
+            strict,
         }
     }
 }

@@ -1,18 +1,23 @@
-// Approach C: Two-Phase Index-then-Extract Parser
-//
-// Phase 1: SIMD structural scan → StructuralIndex (replaces build_index)
-// Phase 2: Extract data using the index
-//
-// Benefits: Better cache utilization, can skip rows, predictable memory usage
+//! Approach C: Two-Phase Index-then-Extract Parser
+//!
+//! Like [`direct`](super::direct), these entry points are deliberately
+//! lenient: they report [`InputTooLarge`](crate::core::InputTooLarge) but not
+//! [`Violation`](crate::core::Violation). Nothing here consumes a violation,
+//! and strictness is offered on the boundary paths the NIF uses instead.
+//!
+//! Phase 1: SIMD structural scan → StructuralIndex (replaces build_index)
+//! Phase 2: Extract data using the index
+//!
+//! Benefits: Better cache utilization, can skip rows, predictable memory usage
 
 use crate::core::{
     extract_field, extract_field_cow, extract_field_cow_with_escape, scan_structural,
-    StructuralIndex,
+    InputTooLarge, StructuralIndex,
 };
 use std::borrow::Cow;
 
 /// Represents a field's position within a row
-#[derive(Debug, Clone, Copy)]
+#[derive(Copy, Clone, Debug)]
 pub struct FieldBound {
     pub start: usize,
     pub end: usize,
@@ -78,14 +83,18 @@ fn structural_to_csv_index(idx: &StructuralIndex, input: &[u8]) -> CsvIndex {
 
 /// Phase 1: Build an index of row and field boundaries
 #[allow(dead_code)]
-pub fn build_index(input: &[u8]) -> CsvIndex {
+pub fn build_index(input: &[u8]) -> Result<CsvIndex, InputTooLarge> {
     build_index_with_config(input, b',', b'"')
 }
 
 /// Phase 1: Build an index with configurable separator and escape
-pub fn build_index_with_config(input: &[u8], separator: u8, escape: u8) -> CsvIndex {
-    let idx = scan_structural(input, &[separator], escape);
-    structural_to_csv_index(&idx, input)
+pub fn build_index_with_config(
+    input: &[u8],
+    separator: u8,
+    escape: u8,
+) -> Result<CsvIndex, InputTooLarge> {
+    let idx = scan_structural(input, &[separator], escape)?;
+    Ok(structural_to_csv_index(&idx, input))
 }
 
 /// Phase 2: Extract all fields using the index (zero-copy when possible)
@@ -149,7 +158,7 @@ pub fn extract_rows<'a>(
 }
 
 /// Combined parse using two-phase approach
-pub fn parse_csv_indexed(input: &[u8]) -> Vec<Vec<Cow<'_, [u8]>>> {
+pub fn parse_csv_indexed(input: &[u8]) -> Result<Vec<Vec<Cow<'_, [u8]>>>, InputTooLarge> {
     parse_csv_indexed_with_config(input, b',', b'"')
 }
 
@@ -158,19 +167,23 @@ pub fn parse_csv_indexed_with_config(
     input: &[u8],
     separator: u8,
     escape: u8,
-) -> Vec<Vec<Cow<'_, [u8]>>> {
-    let index = build_index_with_config(input, separator, escape);
-    extract_all_with_escape(input, &index, escape)
+) -> Result<Vec<Vec<Cow<'_, [u8]>>>, InputTooLarge> {
+    let index = build_index_with_config(input, separator, escape)?;
+    Ok(extract_all_with_escape(input, &index, escape))
 }
 
 /// Build an index with multiple separator support
-pub fn build_index_multi_sep(input: &[u8], separators: &[u8], escape: u8) -> CsvIndex {
+pub fn build_index_multi_sep(
+    input: &[u8],
+    separators: &[u8],
+    escape: u8,
+) -> Result<CsvIndex, InputTooLarge> {
     if separators.len() == 1 {
         return build_index_with_config(input, separators[0], escape);
     }
 
-    let idx = scan_structural(input, separators, escape);
-    structural_to_csv_index(&idx, input)
+    let idx = scan_structural(input, separators, escape)?;
+    Ok(structural_to_csv_index(&idx, input))
 }
 
 /// Combined parse with multiple separator support
@@ -178,9 +191,9 @@ pub fn parse_csv_indexed_multi_sep<'a>(
     input: &'a [u8],
     separators: &[u8],
     escape: u8,
-) -> Vec<Vec<Cow<'a, [u8]>>> {
-    let index = build_index_multi_sep(input, separators, escape);
-    extract_all_with_escape(input, &index, escape)
+) -> Result<Vec<Vec<Cow<'a, [u8]>>>, InputTooLarge> {
+    let index = build_index_multi_sep(input, separators, escape)?;
+    Ok(extract_all_with_escape(input, &index, escape))
 }
 
 #[cfg(test)]
@@ -203,7 +216,7 @@ mod tests {
     #[test]
     fn test_extract_rows_range() {
         let input = b"a,b\nc,d\ne,f\n";
-        let index = build_index(input);
+        let index = build_index(input).expect("test input fits the structural index");
         let rows = to_strings(extract_rows(input, &index, 1, 1));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0], vec!["c", "d"]);
