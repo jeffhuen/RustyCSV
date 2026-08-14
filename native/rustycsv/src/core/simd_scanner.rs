@@ -27,7 +27,7 @@
 
 use std::simd::prelude::*;
 
-use super::simd_index::{RowEnd, StructuralIndex};
+use super::simd_index::{RowEnd, StructuralIndex, Violation};
 
 /// Baseline SIMD chunk size (128-bit).
 pub const CHUNK: usize = 16;
@@ -77,6 +77,135 @@ fn extract_positions(mut mask: u64, base_pos: u32, out: &mut Vec<u32>) {
 }
 
 // ---------------------------------------------------------------------------
+// Quoting-rule validation
+// ---------------------------------------------------------------------------
+//
+// Three rules, taken from nimble_csv 1.3.0 so that strict mode is byte-for-byte
+// compatible with it:
+//
+//   1. A quote may only *open* a field at the start of input or immediately
+//      after a separator, a line feed, or another quote. (`separator_case/0`)
+//   2. A quote that *closes* a field must be followed by a separator, a row
+//      terminator, another quote, or end of input. (`newlines_escape!/1`)
+//   3. Input must not end inside a quoted field. (`finalize_parser/1`)
+//
+// All three are expressed as bitmask lookbehind so they ride along in the
+// existing chunk loop: no extra loads, no branches on the happy path, and no
+// second pass. Opening and closing quotes fall straight out of the parity mask
+// the scanner already computes, since `quoted` is an inclusive prefix XOR:
+// an opening quote has odd parity at its own position, a closing quote even.
+
+/// Byte-level context that a chunk needs from the chunk before it.
+#[derive(Clone, Copy)]
+struct QuoteCarry {
+    /// Previous byte may legally precede an opening quote. Start of input
+    /// counts, which is why this starts `true`.
+    prev_opens_field: bool,
+    /// Previous byte was a quote that closed a field.
+    prev_closed_field: bool,
+}
+
+impl QuoteCarry {
+    const fn at_start() -> Self {
+        Self {
+            prev_opens_field: true,
+            prev_closed_field: false,
+        }
+    }
+}
+
+/// Raw per-chunk bitmasks, each already narrowed to the chunk width.
+///
+/// "Raw" means before the `not_quoted` filter the scanner applies for
+/// separator and row-end extraction. The quoting rules only ever inspect
+/// positions that are provably outside a quoted region, so the unfiltered
+/// masks are both correct here and one operation cheaper.
+struct ChunkMasks {
+    esc: u64,
+    quoted: u64,
+    sep: u64,
+    lf: u64,
+    cr: u64,
+}
+
+/// Validate one chunk's worth of quoting and return the offending bit
+/// positions, or 0 when the chunk is well formed.
+///
+/// `next_is_lf` describes the byte immediately after the chunk, needed because
+/// a carriage return only terminates a row when a line feed follows it. Every
+/// other lookahead is expressed as lookbehind so the loop never has to reach
+/// into the chunk it has not read yet.
+#[inline]
+fn check_quoting(width: u32, m: &ChunkMasks, next_is_lf: bool, carry: &mut QuoteCarry) -> u64 {
+    let width_mask = (1u64 << width) - 1;
+    let top = 1u64 << (width - 1);
+
+    let opening = m.esc & m.quoted;
+    let closing = m.esc & !m.quoted & width_mask;
+
+    // Rule 1. A quote may follow a separator, a line feed, or another quote.
+    // Allowing a quote covers the doubled-quote literal `""`, whose second
+    // character has opening parity.
+    let opens_field = m.sep | m.lf | m.esc;
+    let preceded_by_opener = ((opens_field << 1) | carry.prev_opens_field as u64) & width_mask;
+    let bad_open = opening & !preceded_by_opener;
+
+    // Rule 2. A bare carriage return is data under RFC 4180, so it may only
+    // follow a closing quote as the first byte of a CRLF pair.
+    let crlf_cr = m.cr & ((m.lf >> 1) | ((next_is_lf as u64) << (width - 1)));
+    let closes_field = m.sep | m.lf | m.esc | crlf_cr;
+    let preceded_by_closer = ((closing << 1) | carry.prev_closed_field as u64) & width_mask;
+    let bad_after = preceded_by_closer & !closes_field & width_mask;
+
+    carry.prev_opens_field = opens_field & top != 0;
+    carry.prev_closed_field = closing & top != 0;
+
+    bad_open | bad_after
+}
+
+/// Whether a quote at `pos` is allowed to open a field: start of input, or
+/// immediately after a separator, a line feed, or another quote.
+#[inline]
+fn opens_field_before(input: &[u8], pos: usize, separators: &[u8], escape: u8) -> bool {
+    let Some(prev) = pos.checked_sub(1).map(|i| input[i]) else {
+        return true;
+    };
+    prev == b'\n' || prev == escape || is_sep_scalar(prev, separators)
+}
+
+/// Whether the byte at `pos`, which follows a closing quote, is allowed to be
+/// there: a separator, a row terminator, another quote, or end of input.
+#[inline]
+fn closes_field_at(input: &[u8], pos: usize, separators: &[u8], escape: u8) -> bool {
+    let Some(&next) = input.get(pos) else {
+        return true;
+    };
+    if next == b'\r' {
+        matches!(input.get(pos + 1), Some(&b'\n'))
+    } else {
+        next == b'\n' || next == escape || is_sep_scalar(next, separators)
+    }
+}
+
+/// Record the earliest violation seen so far.
+///
+/// `bad` carries both rule 1 and rule 2 hits, so the rule is recovered from
+/// whether the offending bit is itself a quote.
+#[inline]
+fn record_violation(bad: u64, esc: u64, base: u32, violation: &mut Option<Violation>) {
+    if bad == 0 || violation.is_some() {
+        return;
+    }
+    let bit = bad.trailing_zeros();
+    let pos = base + bit;
+    *violation = Some(if esc >> bit & 1 == 1 {
+        Violation::UnexpectedQuote(pos)
+    } else {
+        Violation::TrailingGarbage(pos)
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Core scanner
 // ---------------------------------------------------------------------------
 
@@ -99,6 +228,8 @@ pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> Structura
 
     let mut pos: usize = 0;
     let mut quote_carry: u64 = 0; // 0 or 1: parity of quotes seen so far
+    let mut carry = QuoteCarry::at_start();
+    let mut violation: Option<Violation> = None;
 
     // -----------------------------------------------------------------------
     // AVX2 wide path: 32-byte chunks
@@ -133,12 +264,29 @@ pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> Structura
             for splat in &sep_splats {
                 sep_bits |= chunk.simd_eq(*splat).to_bitmask() & MASK_32;
             }
+
+            let lf_raw = chunk.simd_eq(lf_splat).to_bitmask() & MASK_32;
+            let cr_raw = chunk.simd_eq(cr_splat).to_bitmask() & MASK_32;
+
+            let masks = ChunkMasks {
+                esc: esc_mask,
+                quoted,
+                sep: sep_bits,
+                lf: lf_raw,
+                cr: cr_raw,
+            };
+            let next_is_lf = matches!(input.get(pos + WIDE), Some(&b) if b == b'\n');
+            let bad = check_quoting(WIDE as u32, &masks, next_is_lf, &mut carry);
+            record_violation(bad, esc_mask, base, &mut violation);
+
             extract_positions(sep_bits & not_quoted, base, &mut field_seps);
-
-            let lf_bits = chunk.simd_eq(lf_splat).to_bitmask() & not_quoted;
-            let cr_bits = chunk.simd_eq(cr_splat).to_bitmask() & not_quoted;
-
-            emit_row_ends(input, pos, lf_bits, cr_bits, &mut row_ends);
+            emit_row_ends(
+                input,
+                pos,
+                lf_raw & not_quoted,
+                cr_raw & not_quoted,
+                &mut row_ends,
+            );
 
             pos += WIDE;
         }
@@ -176,12 +324,29 @@ pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> Structura
             for splat in &sep_splats {
                 sep_bits |= chunk.simd_eq(*splat).to_bitmask() & MASK_16;
             }
+
+            let lf_raw = chunk.simd_eq(lf_splat).to_bitmask() & MASK_16;
+            let cr_raw = chunk.simd_eq(cr_splat).to_bitmask() & MASK_16;
+
+            let masks = ChunkMasks {
+                esc: esc_mask,
+                quoted,
+                sep: sep_bits,
+                lf: lf_raw,
+                cr: cr_raw,
+            };
+            let next_is_lf = matches!(input.get(pos + CHUNK), Some(&b) if b == b'\n');
+            let bad = check_quoting(CHUNK as u32, &masks, next_is_lf, &mut carry);
+            record_violation(bad, esc_mask, base, &mut violation);
+
             extract_positions(sep_bits & not_quoted, base, &mut field_seps);
-
-            let lf_bits = chunk.simd_eq(lf_splat).to_bitmask() & not_quoted;
-            let cr_bits = chunk.simd_eq(cr_splat).to_bitmask() & not_quoted;
-
-            emit_row_ends(input, pos, lf_bits, cr_bits, &mut row_ends);
+            emit_row_ends(
+                input,
+                pos,
+                lf_raw & not_quoted,
+                cr_raw & not_quoted,
+                &mut row_ends,
+            );
 
             pos += CHUNK;
         }
@@ -190,7 +355,7 @@ pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> Structura
     // -----------------------------------------------------------------------
     // Scalar tail
     // -----------------------------------------------------------------------
-    scan_scalar_tail(
+    let ends_in_quotes = scan_scalar_tail(
         input,
         pos,
         separators,
@@ -198,12 +363,21 @@ pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> Structura
         quote_carry != 0,
         &mut field_seps,
         &mut row_ends,
+        &mut violation,
     );
+
+    // Rule 3 is only knowable at end of input, so any positional violation
+    // seen earlier in byte order takes precedence, matching the order
+    // nimble_csv raises in.
+    if ends_in_quotes && violation.is_none() {
+        violation = Some(Violation::UnterminatedQuote);
+    }
 
     StructuralIndex {
         field_seps,
         row_ends,
         input_len: input.len() as u32,
+        violation,
     }
 }
 
@@ -211,7 +385,18 @@ pub fn scan_structural(input: &[u8], separators: &[u8], escape: u8) -> Structura
 ///
 /// Scans `input[start..]` with the given carry state.
 /// Returns the updated carry state (true = currently in quotes).
+///
+/// Quoting violations are reported into `violation` on the same terms as
+/// [`scan_structural`], so the two scanners cannot drift apart in what they
+/// consider well formed. Rule 3 (unterminated quote) is deliberately not
+/// applied here: a feed ending inside a quoted field is normal for a stream
+/// and only becomes an error when the stream itself ends.
 #[allow(dead_code)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors scan_scalar_tail: scan state is threaded explicitly rather \
+              than wrapped in a type that exists only to satisfy the lint"
+)]
 pub fn scan_structural_incremental(
     input: &[u8],
     start: usize,
@@ -220,9 +405,20 @@ pub fn scan_structural_incremental(
     in_quotes: bool,
     field_seps: &mut Vec<u32>,
     row_ends: &mut Vec<RowEnd>,
+    violation: &mut Option<Violation>,
 ) -> bool {
     let mut pos = start;
     let mut quote_carry: u64 = if in_quotes { 1 } else { 0 };
+
+    // Unlike a whole-input scan, this one resumes mid-stream, so the byte
+    // before `start` decides what the first chunk may legally begin with.
+    let mut carry = match start.checked_sub(1).map(|i| input[i]) {
+        None => QuoteCarry::at_start(),
+        Some(prev) => QuoteCarry {
+            prev_opens_field: prev == b'\n' || prev == escape || is_sep_scalar(prev, separators),
+            prev_closed_field: prev == escape && !in_quotes,
+        },
+    };
 
     {
         let esc_splat = Simd::<u8, CHUNK>::splat(escape);
@@ -250,11 +446,29 @@ pub fn scan_structural_incremental(
             for splat in &sep_splats {
                 sep_bits |= chunk.simd_eq(*splat).to_bitmask() & MASK_16;
             }
-            extract_positions(sep_bits & not_quoted, base, field_seps);
 
-            let lf_bits = chunk.simd_eq(lf_splat).to_bitmask() & not_quoted;
-            let cr_bits = chunk.simd_eq(cr_splat).to_bitmask() & not_quoted;
-            emit_row_ends(input, pos, lf_bits, cr_bits, row_ends);
+            let lf_raw = chunk.simd_eq(lf_splat).to_bitmask() & MASK_16;
+            let cr_raw = chunk.simd_eq(cr_splat).to_bitmask() & MASK_16;
+
+            let masks = ChunkMasks {
+                esc: esc_mask,
+                quoted,
+                sep: sep_bits,
+                lf: lf_raw,
+                cr: cr_raw,
+            };
+            let next_is_lf = matches!(input.get(pos + CHUNK), Some(&b) if b == b'\n');
+            let bad = check_quoting(CHUNK as u32, &masks, next_is_lf, &mut carry);
+            record_violation(bad, esc_mask, base, violation);
+
+            extract_positions(sep_bits & not_quoted, base, field_seps);
+            emit_row_ends(
+                input,
+                pos,
+                lf_raw & not_quoted,
+                cr_raw & not_quoted,
+                row_ends,
+            );
 
             pos += CHUNK;
         }
@@ -268,6 +482,7 @@ pub fn scan_structural_incremental(
         quote_carry != 0,
         field_seps,
         row_ends,
+        violation,
     )
 }
 
@@ -313,6 +528,16 @@ fn emit_row_ends(
 
 /// Scalar scan for remaining bytes after SIMD processing.
 /// Returns the final `in_quotes` state.
+///
+/// Quoting rules are checked here by reading the neighbouring bytes directly
+/// rather than by carrying masks. The tail is at most one chunk long, so the
+/// direct reads cost nothing and are easier to prove correct than a second
+/// copy of the bitmask logic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "scan state is threaded explicitly; bundling it into a struct would \
+              add a type whose only purpose is to satisfy the lint"
+)]
 fn scan_scalar_tail(
     input: &[u8],
     start: usize,
@@ -321,8 +546,21 @@ fn scan_scalar_tail(
     mut in_quotes: bool,
     field_seps: &mut Vec<u32>,
     row_ends: &mut Vec<RowEnd>,
+    violation: &mut Option<Violation>,
 ) -> bool {
     let mut pos = start;
+
+    // A quote in the final byte of the last SIMD chunk leaves its successor
+    // unchecked, because the mask lookbehind cannot see past the chunk. That
+    // quote closed a field exactly when parity is now even, so the state is
+    // recoverable without threading the carry through.
+    let closed_at_boundary = start > 0 && input[start - 1] == escape && !in_quotes;
+    if closed_at_boundary
+        && violation.is_none()
+        && !closes_field_at(input, start, separators, escape)
+    {
+        *violation = Some(Violation::TrailingGarbage(start as u32));
+    }
 
     while pos < input.len() {
         let byte = input[pos];
@@ -334,9 +572,15 @@ fn scan_scalar_tail(
                     continue;
                 }
                 in_quotes = false;
+                if violation.is_none() && !closes_field_at(input, pos + 1, separators, escape) {
+                    *violation = Some(Violation::TrailingGarbage((pos + 1) as u32));
+                }
             }
             pos += 1;
         } else if byte == escape {
+            if violation.is_none() && !opens_field_before(input, pos, separators, escape) {
+                *violation = Some(Violation::UnexpectedQuote(pos as u32));
+            }
             in_quotes = true;
             pos += 1;
         } else if byte == b'\n' {
@@ -387,6 +631,157 @@ mod tests {
 
     fn scan(input: &[u8]) -> StructuralIndex {
         scan_structural(input, b",", b'"')
+    }
+
+    fn violation_of(input: &str) -> Option<Violation> {
+        scan(input.as_bytes()).violation
+    }
+
+    /// Pad to `len` bytes of well-formed rows so the case under test lands
+    /// past the SIMD chunk boundary rather than in the scalar tail.
+    fn with_simd_prefix(suffix: &str) -> String {
+        let mut s = String::new();
+        while s.len() < 2 * CHUNK {
+            s.push_str("aaaa,bbbb\n");
+        }
+        s.push_str(suffix);
+        s
+    }
+
+    // =======================================================================
+    // Quoting rule 1: a quote may only open a field at a field boundary
+    // =======================================================================
+
+    #[test]
+    fn well_formed_input_reports_no_violation() {
+        assert_eq!(violation_of("a,b\n\"x,y\",2\n"), None);
+    }
+
+    #[test]
+    fn doubled_quote_inside_a_quoted_field_is_not_a_violation() {
+        assert_eq!(violation_of("\"say \"\"hi\"\"\",2\n"), None);
+    }
+
+    #[test]
+    fn empty_quoted_field_is_not_a_violation() {
+        assert_eq!(violation_of("\"\",2\n"), None);
+    }
+
+    #[test]
+    fn quote_in_the_middle_of_an_unquoted_field_is_a_violation() {
+        assert_eq!(
+            violation_of("a,b\nx\"y,2\n"),
+            Some(Violation::UnexpectedQuote(5))
+        );
+    }
+
+    #[test]
+    fn quote_after_a_bare_carriage_return_is_a_violation() {
+        assert_eq!(
+            violation_of("a\r\"b\"\n"),
+            Some(Violation::UnexpectedQuote(2))
+        );
+    }
+
+    #[test]
+    fn quote_opening_a_field_after_a_separator_is_not_a_violation() {
+        assert_eq!(violation_of("a,\"b\"\n"), None);
+    }
+
+    // =======================================================================
+    // Quoting rule 2: a closing quote must be followed by a delimiter
+    // =======================================================================
+
+    #[test]
+    fn text_immediately_after_a_closing_quote_is_a_violation() {
+        assert_eq!(
+            violation_of("\"x\"junk,2\n"),
+            Some(Violation::TrailingGarbage(3))
+        );
+    }
+
+    #[test]
+    fn closing_quote_followed_by_crlf_is_not_a_violation() {
+        assert_eq!(violation_of("\"x\",\"y\"\r\n"), None);
+    }
+
+    #[test]
+    fn closing_quote_followed_by_a_bare_carriage_return_is_a_violation() {
+        assert_eq!(
+            violation_of("\"x\"\rjunk"),
+            Some(Violation::TrailingGarbage(3))
+        );
+    }
+
+    #[test]
+    fn closing_quote_at_end_of_input_is_not_a_violation() {
+        assert_eq!(violation_of("a,\"b\""), None);
+    }
+
+    // =======================================================================
+    // Quoting rule 3: input must not end inside a quoted field
+    // =======================================================================
+
+    #[test]
+    fn input_ending_inside_a_quoted_field_is_a_violation() {
+        assert_eq!(
+            violation_of("a,b\n\"x,2\n"),
+            Some(Violation::UnterminatedQuote)
+        );
+    }
+
+    #[test]
+    fn an_earlier_positional_violation_outranks_an_unterminated_quote() {
+        assert_eq!(
+            violation_of("x\"y\n\"unterminated"),
+            Some(Violation::UnexpectedQuote(1))
+        );
+    }
+
+    // =======================================================================
+    // The same rules must hold in the SIMD path, not just the scalar tail
+    // =======================================================================
+
+    #[test]
+    fn quote_violation_is_detected_past_the_first_simd_chunk() {
+        let input = with_simd_prefix("x\"y,2\n");
+        let expected = (input.len() - 6 + 1) as u32;
+        assert_eq!(
+            violation_of(&input),
+            Some(Violation::UnexpectedQuote(expected))
+        );
+    }
+
+    #[test]
+    fn trailing_garbage_is_detected_past_the_first_simd_chunk() {
+        let input = with_simd_prefix("\"x\"junk\n");
+        let expected = (input.len() - 8 + 3) as u32;
+        assert_eq!(
+            violation_of(&input),
+            Some(Violation::TrailingGarbage(expected))
+        );
+    }
+
+    #[test]
+    fn well_formed_input_spanning_many_chunks_reports_no_violation() {
+        let input = with_simd_prefix("\"quoted, field\",\"say \"\"hi\"\"\"\r\n");
+        assert_eq!(violation_of(&input), None);
+    }
+
+    /// A violation landing exactly on a chunk boundary is the case the mask
+    /// lookbehind carry exists to handle, so pin every offset around it.
+    #[test]
+    fn violations_are_detected_at_every_chunk_boundary_offset() {
+        for pad in 0..(2 * CHUNK + 3) {
+            let mut input = "a".repeat(pad);
+            let quote_at = input.len() + 1;
+            input.push_str("x\"y\n");
+            assert_eq!(
+                violation_of(&input),
+                Some(Violation::UnexpectedQuote(quote_at as u32)),
+                "pad={pad}"
+            );
+        }
     }
 
     // =======================================================================
@@ -742,7 +1137,9 @@ mod tests {
         let mut seps = Vec::new();
         let mut ends = Vec::new();
 
-        let carry = scan_structural_incremental(input, 0, b",", b'"', false, &mut seps, &mut ends);
+        let carry = scan_structural_incremental(
+            input, 0, b",", b'"', false, &mut seps, &mut ends, &mut None,
+        );
 
         assert!(!carry);
         assert_eq!(seps, vec![1, 5]);
@@ -765,7 +1162,9 @@ mod tests {
         let mut seps = Vec::new();
         let mut ends = Vec::new();
 
-        let carry = scan_structural_incremental(input, 0, b",", b'"', true, &mut seps, &mut ends);
+        let carry = scan_structural_incremental(
+            input, 0, b",", b'"', true, &mut seps, &mut ends, &mut None,
+        );
 
         assert!(!carry, "quote closed at pos 11, should not be in quotes");
         assert_eq!(

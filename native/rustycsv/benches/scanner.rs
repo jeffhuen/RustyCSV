@@ -38,7 +38,9 @@ fn mixed_csv(rows: usize) -> String {
     let mut out = String::with_capacity(rows * 60);
     for i in 0..rows {
         if i % 5 == 0 {
-            out.push_str(&format!("{i},\"Doe, Jane\",engineering,{i}0000,2024-01-15\n"));
+            out.push_str(&format!(
+                "{i},\"Doe, Jane\",engineering,{i}0000,2024-01-15\n"
+            ));
         } else {
             out.push_str(&format!("{i},alice{i},engineering,{i}0000,2024-01-15\n"));
         }

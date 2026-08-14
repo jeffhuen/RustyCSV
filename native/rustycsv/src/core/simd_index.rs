@@ -17,6 +17,25 @@ pub struct RowEnd {
     pub len: u8,
 }
 
+/// Where a quoting rule was broken, and which rule it was.
+///
+/// The scanner parses leniently and records violations rather than stopping,
+/// so a caller that does not ask for strict behaviour pays nothing and sees
+/// the same rows it always did. `RustyCSV.ParseError` is raised at the Elixir
+/// boundary from this value; the scanner itself never panics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Violation {
+    /// A quote opened a field somewhere other than the start of a field.
+    /// Byte position of the offending quote.
+    UnexpectedQuote(u32),
+    /// A closing quote was followed by something other than a separator, a
+    /// row terminator, another quote, or end of input. Byte position of the
+    /// offending byte, not of the quote.
+    TrailingGarbage(u32),
+    /// Input ended while still inside a quoted field.
+    UnterminatedQuote,
+}
+
 /// Structural index: positions of all unquoted separators and row endings.
 #[derive(Debug)]
 #[must_use]
@@ -27,6 +46,9 @@ pub struct StructuralIndex {
     pub row_ends: Vec<RowEnd>,
     /// Total input length.
     pub input_len: u32,
+    /// First quoting rule broken, in byte order, or `None` for well-formed
+    /// input. Populated on every scan; acting on it is the caller's choice.
+    pub violation: Option<Violation>,
 }
 
 impl StructuralIndex {
@@ -284,6 +306,7 @@ mod tests {
             field_seps: seps,
             row_ends: ends,
             input_len: len,
+            violation: None,
         }
     }
 
