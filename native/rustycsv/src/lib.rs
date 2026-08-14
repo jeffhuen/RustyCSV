@@ -1,10 +1,10 @@
 #![feature(portable_simd)]
-// RustyCSV - Fast CSV parsing with multiple strategies
-//
-// NIF safety: no unwrap/expect in production code. Fallible paths use match + early return.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
-//
-// Strategies:
+//! RustyCSV - Fast CSV parsing with multiple strategies
+//!
+//! NIF safety: no unwrap/expect in production code. Fallible paths use match + early return.
+//!
+//! Strategies:
 // A/B/C/F: SIMD boundary scan + hybrid sub-binary term builder (parse_string,
 //          parse_string_fast, parse_string_indexed, parse_string_zero_copy).
 //          These are functionally equivalent — all use the same code path.

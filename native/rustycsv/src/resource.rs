@@ -1,7 +1,7 @@
-// ResourceArc wrapper for streaming parser
-//
-// This allows the streaming parser state to persist across NIF calls.
-// Supports both single-byte (fast path) and general (multi-byte) parsers.
+//! ResourceArc wrapper for streaming parser
+//!
+//! This allows the streaming parser state to persist across NIF calls.
+//! Supports both single-byte (fast path) and general (multi-byte) parsers.
 
 use crate::core::Newlines;
 use crate::strategy::{GeneralStreamingParser, GeneralStreamingParserNewlines, StreamingParser};

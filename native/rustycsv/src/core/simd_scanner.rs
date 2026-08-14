@@ -1,29 +1,29 @@
-// SIMD structural CSV scanner — simdjson-style prefix-XOR quote detection
-//
-// Scans the entire input once, producing a StructuralIndex of all unquoted
-// separators and row endings. Both batch code paths consume this index: the
-// :simd family (:simd, :basic, :indexed, :zero_copy) and :parallel.
-//
-// ## Stabilization-safe API subset (std::simd)
-//
-// We use only: Simd::from_slice, splat, simd_eq, to_bitmask, bitwise ops.
-// These are the most stable parts of portable_simd. We avoid: swizzle,
-// scatter, gather, and any SIMD shuffles.
-//
-// ## Bitmask types
-//
-// On current nightly, `Mask::to_bitmask()` returns u64 regardless of lane
-// count. We mask to the relevant bits (lower 16 for CHUNK=16, lower 32 for
-// WIDE=32) and operate on u64 uniformly.
-//
-// ## Optimization notes
-//
-// - Uses `to_bitmask()` + bit extraction (not `.any()` + break) because we
-//   need ALL structural positions, not just the first one per chunk.
-// - Prefix-XOR for quote region detection: portable shift-and-xor cascade
-//   for all targets, with CLMUL/PMULL fast paths on x86_64/aarch64.
-// - AVX2 wide path (32 bytes) processes first, then 16-byte remainder,
-//   then scalar tail. Same pattern as RustyJSON's skip_plain_string_bytes.
+//! SIMD structural CSV scanner — simdjson-style prefix-XOR quote detection
+//!
+//! Scans the entire input once, producing a StructuralIndex of all unquoted
+//! separators and row endings. Both batch code paths consume this index: the
+//! :simd family (:simd, :basic, :indexed, :zero_copy) and :parallel.
+//!
+//! ## Stabilization-safe API subset (std::simd)
+//!
+//! We use only: Simd::from_slice, splat, simd_eq, to_bitmask, bitwise ops.
+//! These are the most stable parts of portable_simd. We avoid: swizzle,
+//! scatter, gather, and any SIMD shuffles.
+//!
+//! ## Bitmask types
+//!
+//! On current nightly, `Mask::to_bitmask()` returns u64 regardless of lane
+//! count. We mask to the relevant bits (lower 16 for CHUNK=16, lower 32 for
+//! WIDE=32) and operate on u64 uniformly.
+//!
+//! ## Optimization notes
+//!
+//! - Uses `to_bitmask()` + bit extraction (not `.any()` + break) because we
+//!   need ALL structural positions, not just the first one per chunk.
+//! - Prefix-XOR for quote region detection: portable shift-and-xor cascade
+//!   for all targets, with CLMUL/PMULL fast paths on x86_64/aarch64.
+//! - AVX2 wide path (32 bytes) processes first, then 16-byte remainder,
+//!   then scalar tail. Same pattern as RustyJSON's skip_plain_string_bytes.
 
 use std::simd::prelude::*;
 

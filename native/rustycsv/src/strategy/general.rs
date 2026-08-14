@@ -1,11 +1,11 @@
-// General multi-byte separator and escape strategy
-//
-// This module handles arbitrary-length separators and escape sequences.
-// It is only used when at least one separator or the escape is multi-byte.
-// For single-byte cases, the existing optimized strategies are used instead.
-//
-// No SIMD — clean byte-by-byte with starts_with checks. This is acceptable
-// since multi-byte delimiters are uncommon.
+//! General multi-byte separator and escape strategy
+//!
+//! This module handles arbitrary-length separators and escape sequences.
+//! It is only used when at least one separator or the escape is multi-byte.
+//! For single-byte cases, the existing optimized strategies are used instead.
+//!
+//! No SIMD — clean byte-by-byte with starts_with checks. This is acceptable
+//! since multi-byte delimiters are uncommon.
 
 use std::borrow::Cow;
 
@@ -187,7 +187,7 @@ fn parse_row_general<'a>(
 // ============================================================================
 
 /// Field boundary for general parsing
-#[derive(Debug, Clone, Copy)]
+#[derive(Copy, Clone, Debug)]
 #[must_use]
 pub struct GeneralFieldBound {
     pub start: usize,

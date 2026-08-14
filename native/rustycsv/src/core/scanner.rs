@@ -1,4 +1,4 @@
-// Byte-level helpers for field splitting.
+//! Byte-level helpers for field splitting.
 
 /// Check if a byte is one of the separator bytes
 /// Optimized for common cases of 1-3 separators

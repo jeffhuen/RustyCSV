@@ -1,9 +1,9 @@
-// Approach C: Two-Phase Index-then-Extract Parser
-//
-// Phase 1: SIMD structural scan → StructuralIndex (replaces build_index)
-// Phase 2: Extract data using the index
-//
-// Benefits: Better cache utilization, can skip rows, predictable memory usage
+//! Approach C: Two-Phase Index-then-Extract Parser
+//!
+//! Phase 1: SIMD structural scan → StructuralIndex (replaces build_index)
+//! Phase 2: Extract data using the index
+//!
+//! Benefits: Better cache utilization, can skip rows, predictable memory usage
 
 use crate::core::{
     extract_field, extract_field_cow, extract_field_cow_with_escape, scan_structural,
@@ -12,7 +12,7 @@ use crate::core::{
 use std::borrow::Cow;
 
 /// Represents a field's position within a row
-#[derive(Debug, Clone, Copy)]
+#[derive(Copy, Clone, Debug)]
 pub struct FieldBound {
     pub start: usize,
     pub end: usize,

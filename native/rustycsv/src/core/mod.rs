@@ -1,4 +1,4 @@
-// Core primitives for CSV parsing
+//! Core primitives for CSV parsing
 
 pub mod field;
 pub mod newlines;

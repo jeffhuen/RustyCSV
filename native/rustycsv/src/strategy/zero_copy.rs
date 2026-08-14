@@ -1,8 +1,8 @@
-// Zero-Copy Strategy: Returns field boundaries for sub-binary term construction
-//
-// Instead of copying field data, this strategy returns (start, end) positions
-// that can be used to create BEAM sub-binaries referencing the original input.
-// Uses the SIMD structural scanner for fast boundary detection.
+//! Zero-Copy Strategy: Returns field boundaries for sub-binary term construction
+//!
+//! Instead of copying field data, this strategy returns (start, end) positions
+//! that can be used to create BEAM sub-binaries referencing the original input.
+//! Uses the SIMD structural scanner for fast boundary detection.
 
 use crate::core::scan_structural;
 

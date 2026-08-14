@@ -1,14 +1,14 @@
-// Structural index for SIMD-scanned CSV
-//
-// Produced by simd_scanner, consumed by all strategies.
-// Positions use u32 to halve memory vs usize on 64-bit systems.
-//
-// **Limit**: inputs must not exceed u32::MAX (4 GiB). The NIF boundary
-// enforces this via `guard_input_size`; if you call `scan_structural`
-// from Rust code directly, you must validate the input length yourself.
+//! Structural index for SIMD-scanned CSV
+//!
+//! Produced by simd_scanner, consumed by all strategies.
+//! Positions use u32 to halve memory vs usize on 64-bit systems.
+//!
+//! **Limit**: inputs must not exceed u32::MAX (4 GiB). The NIF boundary
+//! enforces this via `guard_input_size`; if you call `scan_structural`
+//! from Rust code directly, you must validate the input length yourself.
 
 /// A newline terminator position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[must_use]
 pub struct RowEnd {
     /// Byte position of terminator start (\n or \r in \r\n).

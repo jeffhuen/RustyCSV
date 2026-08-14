@@ -1,34 +1,34 @@
-// Parallel Parser using Rayon
-//
-// Strategy:
-// 1. Single-threaded: SIMD structural scan → row boundaries + field separator positions
-// 2. O(n) cursor walk: collect (row_start, content_end, sep_lo, sep_hi) into a flat Vec
-// 3. Parallel: Each worker slices into the shared field_seps array — no re-scanning
-//
-// ## Evolution of field-position reuse from the structural index
-//
-// The SIMD structural scanner already finds every separator position. We tried
-// three approaches to reuse those positions instead of re-scanning with memchr:
-//
-// Approach A — Pre-collect Vec<Vec<(u32, u32)>> field bounds, then par_iter:
-//   Simple CSV: 567 → 464 ips (-18%)
-//   Large 7MB:  40.6 → 38.0 ips (-6%)
-//   Cause: 10K+ inner Vec allocations for per-row field bounds.
-//
-// Approach B — Share &StructuralIndex, each worker calls fields_in_row() (binary search):
-//   Simple CSV: 567 → 503 ips (-11%)
-//   Large 7MB:  40.6 → 35.7 ips (-12%)
-//   Very Large: 1.99 → 1.80 ips (-10%)
-//   Cause: Two partition_point calls per row = O(log n) per row.
-//
-// Approach C (current) — Flat index + direct slice:
-//   O(n) cursor walk builds a single flat Vec<(u32, u32, usize, usize)> mapping
-//   each row to its slice of field_seps. Each parallel worker indexes directly
-//   into the shared &[u32] — zero per-row allocation, O(1) lookup, no re-scanning.
-//   This avoids A's allocation overhead and B's binary search overhead.
-//
-// Important: We can't build BEAM terms on worker threads, so we return
-// owned Vec<Vec<Vec<u8>>> and convert to terms on the scheduler thread.
+//! Parallel Parser using Rayon
+//!
+//! Strategy:
+//! 1. Single-threaded: SIMD structural scan → row boundaries + field separator positions
+//! 2. O(n) cursor walk: collect (row_start, content_end, sep_lo, sep_hi) into a flat Vec
+//! 3. Parallel: Each worker slices into the shared field_seps array — no re-scanning
+//!
+//! ## Evolution of field-position reuse from the structural index
+//!
+//! The SIMD structural scanner already finds every separator position. We tried
+//! three approaches to reuse those positions instead of re-scanning with memchr:
+//!
+//! Approach A — Pre-collect Vec<Vec<(u32, u32)>> field bounds, then par_iter:
+//!   Simple CSV: 567 → 464 ips (-18%)
+//!   Large 7MB:  40.6 → 38.0 ips (-6%)
+//!   Cause: 10K+ inner Vec allocations for per-row field bounds.
+//!
+//! Approach B — Share &StructuralIndex, each worker calls fields_in_row() (binary search):
+//!   Simple CSV: 567 → 503 ips (-11%)
+//!   Large 7MB:  40.6 → 35.7 ips (-12%)
+//!   Very Large: 1.99 → 1.80 ips (-10%)
+//!   Cause: Two partition_point calls per row = O(log n) per row.
+//!
+//! Approach C (current) — Flat index + direct slice:
+//!   O(n) cursor walk builds a single flat Vec<(u32, u32, usize, usize)> mapping
+//!   each row to its slice of field_seps. Each parallel worker indexes directly
+//!   into the shared &[u32] — zero per-row allocation, O(1) lookup, no re-scanning.
+//!   This avoids A's allocation overhead and B's binary search overhead.
+//!
+//! Important: We can't build BEAM terms on worker threads, so we return
+//! owned Vec<Vec<Vec<u8>>> and convert to terms on the scheduler thread.
 
 use crate::core::{extract_field_owned_with_escape, scan_structural};
 use rayon::prelude::*;

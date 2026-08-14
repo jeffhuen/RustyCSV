@@ -1,9 +1,9 @@
-// Direct parsing strategies (A and B — both use the SIMD scanner)
-//
-// Strategies A (basic) and B (SIMD) are now equivalent. Both use the
-// same SIMD structural scanner to find all field separators and row
-// endings in a single pass, then extract fields via Cow slices.
-// The separate function names are retained for backward API compatibility.
+//! Direct parsing strategies (A and B — both use the SIMD scanner)
+//!
+//! Strategies A (basic) and B (SIMD) are now equivalent. Both use the
+//! same SIMD structural scanner to find all field separators and row
+//! endings in a single pass, then extract fields via Cow slices.
+//! The separate function names are retained for backward API compatibility.
 
 use crate::core::{extract_field_cow_with_escape, scan_structural};
 use std::borrow::Cow;

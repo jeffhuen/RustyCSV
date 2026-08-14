@@ -1,4 +1,4 @@
-// Field extraction and quote handling
+//! Field extraction and quote handling
 
 use std::borrow::Cow;
 

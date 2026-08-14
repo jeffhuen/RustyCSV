@@ -1,12 +1,12 @@
-// Approach D: Streaming Parser
-//
-// Stateful chunked parser for processing large files with bounded memory.
-// Feed chunks of data and extract complete rows as they become available.
-//
-// Key design:
-// - Owns data (Vec<u8>) because input chunks are temporary
-// - Buffers incomplete rows until more data arrives
-// - Returns rows in batches to reduce NIF call overhead
+//! Approach D: Streaming Parser
+//!
+//! Stateful chunked parser for processing large files with bounded memory.
+//! Feed chunks of data and extract complete rows as they become available.
+//!
+//! Key design:
+//! - Owns data (Vec<u8>) because input chunks are temporary
+//! - Buffers incomplete rows until more data arrives
+//! - Returns rows in batches to reduce NIF call overhead
 
 use crate::core::{extract_field_owned_with_escape, is_separator};
 
@@ -29,7 +29,7 @@ pub(crate) fn shrink_excess<T>(v: &mut Vec<T>) {
 }
 
 /// Error returned when a streaming `feed()` would exceed the buffer limit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("streaming buffer overflow: feed would exceed maximum buffer size")]
 #[must_use]
 pub struct BufferOverflow;

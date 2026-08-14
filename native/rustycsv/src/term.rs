@@ -1,4 +1,4 @@
-// Shared term building utilities for converting Rust data to Elixir terms
+//! Shared term building utilities for converting Rust data to Elixir terms
 
 use rustler::{Binary, Env, NewBinary, Term};
 

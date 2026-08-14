@@ -1,10 +1,10 @@
-// UTF-8 → target encoding converters
-//
-// Pure-Rust implementations for converting UTF-8 encoded bytes to other
-// character encodings. No external crate dependencies.
+//! UTF-8 → target encoding converters
+//!
+//! Pure-Rust implementations for converting UTF-8 encoded bytes to other
+//! character encodings. No external crate dependencies.
 
 /// Target encoding for output conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EncodingTarget {
     Utf8,
     Latin1,
