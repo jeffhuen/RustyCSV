@@ -115,7 +115,7 @@ RustyCSV's BEAM-side allocation is ~1.6 KB across all strategies — just list/t
 |--------|------|------|---------|
 | RustyCSV | line-based | 54ms | **2.2x faster** |
 | Pure Elixir | line-based | 117ms | baseline |
-| RustyCSV | 64KB binary chunks | 244ms | unique capability |
+| RustyCSV | 64KB binary chunks | 244ms | direct chunk mode |
 
 **Result:** RustyCSV is **2.2x faster** for line-based streaming.
 
@@ -123,7 +123,7 @@ RustyCSV automatically detects `File.Stream` in line mode and switches to 64KB b
 
 ### Arbitrary Binary Chunks
 
-RustyCSV can also process arbitrary binary chunks directly (useful for network streams, compressed data, etc.). Pure Elixir `parse_stream` operates on line-delimited input, which is the standard approach when using `File.stream!/1`.
+RustyCSV can also process arbitrary binary chunks directly (useful for network streams, compressed data, etc.). NimbleCSV's `parse_stream` expects line-delimited input, but it supports arbitrary chunks through `to_line_stream/1`. RustyCSV accepts those chunks directly without that normalization step.
 
 ## Real-World Benchmark: Amazon Settlement Reports
 

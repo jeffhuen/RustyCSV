@@ -258,9 +258,9 @@ changing the callback contract.
 
 **`parse_stream/2` with non-line-delimited chunks**
 
-The two libraries use different streaming architectures. NimbleCSV's `parse_stream` expects each element of the input enumerable to be a complete line. RustyCSV's streaming parser accepts arbitrary chunk boundaries because the Rust NIF maintains parse state across `feed()` calls.
+The two libraries use different streaming architectures. NimbleCSV's `parse_stream` expects each element of the input enumerable to be a complete line, but arbitrary chunks are supported by first calling `to_line_stream/1`. RustyCSV's streaming parser accepts arbitrary chunk boundaries directly because the Rust NIF maintains parse state across `feed()` calls.
 
-This difference is invisible for the standard use case (`File.stream! |> parse_stream`), where both produce identical output. It only surfaces when manually constructing a stream of non-line-delimited binary chunks.
+This difference is invisible for the standard use case (`File.stream! |> parse_stream`), where both produce identical output. For non-line-delimited chunks, NimbleCSV requires the explicit line-normalization step while RustyCSV does not.
 
 RustyCSV also exposes strategy selection, headers-to-maps, and `strict: false`
 as extensions. Strict parsing remains the default.

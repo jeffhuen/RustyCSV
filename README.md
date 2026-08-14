@@ -14,7 +14,7 @@
 
 2. **Flexibility**: Different workloads benefit from different strategies—parallel processing for huge files, streaming for unbounded data.
 
-3. **Binary chunk streaming**: RustyCSV can process arbitrary binary chunks (useful for network streams, compressed data, etc.).
+3. **Direct binary chunk streaming**: RustyCSV's `parse_stream/2` processes arbitrary binary chunks without first converting them to a line-oriented stream.
 
 **Why not wrap an existing Rust CSV library?** The excellent [csv](https://docs.rs/csv) crate is designed for Rust workflows, not BEAM integration. Wrapping it would require serializing data between Rust and Erlang formats—adding overhead and losing the benefits of direct term construction.
 
@@ -33,7 +33,7 @@
 | **Parsing strategies** | 3 (SIMD, parallel, streaming) | 1 |
 | **SIMD acceleration** | ✅ via `std::simd` portable SIMD | ❌ |
 | **Parallel parsing** | ✅ via rayon | ❌ |
-| **Binary chunk streaming** | ✅ arbitrary chunks | ❌ line-delimited only |
+| **Arbitrary-chunk streaming** | ✅ directly via `parse_stream/2` | ✅ via `to_line_stream/1` |
 | **Multi-separator support** | ✅ `[",", ";"]`, `"::"` | ✅ |
 | **Encoding support** | ✅ UTF-8, UTF-16, Latin-1, UTF-32 | ✅ |
 | **Memory model** | Sub-binary references | Sub-binary references |
