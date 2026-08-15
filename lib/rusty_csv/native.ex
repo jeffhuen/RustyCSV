@@ -77,40 +77,6 @@ defmodule RustyCSV.Native do
 
   version = Mix.Project.config()[:version]
 
-  avx2_detect = fn _config ->
-    try do
-      cond do
-        File.exists?("/proc/cpuinfo") ->
-          case File.read("/proc/cpuinfo") do
-            {:ok, info} -> String.contains?(info, "avx2")
-            _ -> false
-          end
-
-        match?({:win32, _}, :os.type()) ->
-          script =
-            ~S/Add-Type -Namespace RustyCSV -Name CpuFeatures -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);'; [RustyCSV.CpuFeatures]::IsProcessorFeaturePresent(40)/
-
-          case System.cmd("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
-                 stderr_to_stdout: true
-               ) do
-            {result, 0} -> String.trim(result) == "True"
-            _ -> false
-          end
-
-        true ->
-          # macOS x86_64: check via sysctl
-          case System.cmd("sysctl", ["-n", "hw.optional.avx2_0"], stderr_to_stdout: true) do
-            {"1\n", 0} -> true
-            _ -> false
-          end
-      end
-    rescue
-      _ -> false
-    end
-  end
-
-  x86_64_variants = [avx2: avx2_detect]
-
   use RustlerPrecompiled,
     otp_app: :rusty_csv,
     crate: "rustycsv",
@@ -122,13 +88,6 @@ defmodule RustyCSV.Native do
         ["aarch64-apple-darwin", "x86_64-apple-darwin"] ++
           RustlerPrecompiled.Config.default_targets()
       ),
-    variants: %{
-      "x86_64-unknown-linux-gnu" => x86_64_variants,
-      "x86_64-apple-darwin" => x86_64_variants,
-      "x86_64-pc-windows-msvc" => x86_64_variants,
-      "x86_64-pc-windows-gnu" => x86_64_variants,
-      "x86_64-unknown-linux-musl" => x86_64_variants
-    },
     version: version
 
   # ==========================================================================

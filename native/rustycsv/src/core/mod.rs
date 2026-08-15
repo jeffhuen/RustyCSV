@@ -16,5 +16,3 @@ pub use simd_index::{
 };
 pub use simd_scanner::scan_structural;
 pub use simd_scanner::CHUNK;
-#[cfg(target_feature = "avx2")]
-pub use simd_scanner::WIDE;

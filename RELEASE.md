@@ -30,11 +30,11 @@
    `git commit -m "Prepare vx.y.z"`
 5. Push to main: `git push origin main`
 6. Trigger NIF build: `gh workflow run release.yml --field version=x.y.z`
-7. **Wait for ALL 45 builds to complete** (~5-10 min)
+7. **Wait for ALL 30 builds to complete** (~5-10 min)
    ```bash
    gh run watch <run-id>
    ```
-8. Verify draft release has 45 assets:
+8. Verify draft release has 30 assets:
    ```bash
    gh release view vx.y.z --json assets --jq '.assets | length'
    ```
@@ -50,7 +50,7 @@
 
 ## Important Notes
 
-- **Do NOT publish the draft release (step 8) until ALL 45 jobs complete and assets are attached**
+- **Do NOT publish the draft release (step 8) until ALL 30 jobs complete and assets are attached**
 - The workflow creates a draft release - each job attaches its asset to this draft
 - Publishing too early causes a race condition where later jobs fail to attach their assets
 - Step 7 verifies all assets are present before proceeding
@@ -65,7 +65,7 @@ gh run list --workflow=release.yml
 gh run watch <run-id>
 
 # Check draft release assets
-gh release view vx.y.z --json assets --jq '.assets | length'  # Should be 45
+gh release view vx.y.z --json assets --jq '.assets | length'  # Should be 30
 gh release view vx.y.z --json assets --jq '.assets[].name'
 
 # If something goes wrong, delete and retry
