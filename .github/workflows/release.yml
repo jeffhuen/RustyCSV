@@ -13,31 +13,23 @@ permissions:
 
 jobs:
   build_release:
-    name: NIF ${{ matrix.nif }} - ${{ matrix.job.target }}${{ matrix.job.variant && format(' ({0})', matrix.job.variant) || '' }} (${{ matrix.job.os }})
+    name: NIF ${{ matrix.nif }} - ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
       matrix:
         nif: ["2.17", "2.16", "2.15"]
         job:
-          # Non-x86 targets (no AVX2 variant needed)
           - { target: arm-unknown-linux-gnueabihf , os: ubuntu-22.04 , use-cross: true }
           - { target: aarch64-unknown-linux-gnu   , os: ubuntu-22.04 , use-cross: true }
           - { target: aarch64-unknown-linux-musl  , os: ubuntu-22.04 , use-cross: true }
           - { target: aarch64-apple-darwin        , os: macos-14     }
           - { target: riscv64gc-unknown-linux-gnu , os: ubuntu-22.04 , use-cross: true }
-          # x86_64 baseline (SSE2, 16-byte SIMD)
           - { target: x86_64-apple-darwin         , os: macos-15     }
           - { target: x86_64-unknown-linux-gnu    , os: ubuntu-22.04 }
           - { target: x86_64-unknown-linux-musl   , os: ubuntu-22.04 , use-cross: true }
           - { target: x86_64-pc-windows-gnu       , os: windows-2022 }
           - { target: x86_64-pc-windows-msvc      , os: windows-2022 }
-          # x86_64 AVX2 variant (32-byte SIMD for Haswell+ CPUs)
-          - { target: x86_64-apple-darwin         , os: macos-15     , variant: avx2 }
-          - { target: x86_64-unknown-linux-gnu    , os: ubuntu-22.04 , variant: avx2 }
-          - { target: x86_64-unknown-linux-musl   , os: ubuntu-22.04 , use-cross: true, variant: avx2 }
-          - { target: x86_64-pc-windows-gnu       , os: windows-2022 , variant: avx2 }
-          - { target: x86_64-pc-windows-msvc      , os: windows-2022 , variant: avx2 }
 
     env:
       RUSTUP_TOOLCHAIN: nightly-2026-07-27
@@ -67,18 +59,6 @@ jobs:
           toolchain: nightly-2026-07-27
           targets: ${{ matrix.job.target }}
 
-      - name: Set RUSTFLAGS for AVX2 variant
-        if: matrix.job.variant == 'avx2'
-        shell: bash
-        run: echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=x86-64-v3" >> $GITHUB_ENV
-
-      # When RUSTFLAGS env var is set, it overrides .cargo/config.toml rustflags.
-      # musl targets need -crt-static to produce cdylib (.so) output.
-      - name: Add musl cdylib flags
-        if: contains(matrix.job.target, 'musl') && env.RUSTFLAGS != ''
-        shell: bash
-        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=-crt-static" >> $GITHUB_ENV
-
       - name: Build the project
         id: build-crate
         uses: philss/rustler-precompiled-action@v1.1.4
@@ -89,7 +69,6 @@ jobs:
           nif-version: ${{ matrix.nif }}
           use-cross: ${{ matrix.job.use-cross }}
           project-dir: "native/rustycsv"
-          variant: ${{ matrix.job.variant }}
 
       - name: Artifact upload
         uses: actions/upload-artifact@v4

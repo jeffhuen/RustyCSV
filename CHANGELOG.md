@@ -52,8 +52,11 @@ default CSV output.
   this does not claim recovery from arbitrary native crashes.
 - Moved all streaming resource locks onto dirty CPU schedulers.
 - Pinned the Rust nightly used by source, CI, and release builds.
-- Replaced the unconditional Windows AVX2 assumption with Windows' processor
-  feature check, retaining the optimized binary with safe baseline fallback.
+- Removed build-host CPU probing and x86-64-v3 precompiled variants. All release
+  artifacts now use portable target baselines, so a CI or build machine cannot
+  select a binary that is incompatible with its deployment host.
+- Kept the parser and encoder on safe portable SIMD after x86 benchmarks found
+  no consistent end-to-end NIF gain sufficient to justify runtime unsafe dispatch.
 
 ### Verification
 

@@ -30,7 +30,7 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 ### Validated Correctness
 
-- **484 ExUnit tests plus 131 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
+- **494 ExUnit tests plus 5 properties and 125 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
 - **Cross-strategy validation** - All strategies produce identical output
 - **NimbleCSV compatibility** - The upstream semantic test suites pass against RustyCSV
 
@@ -60,7 +60,7 @@ CSV.parse_string(huge_csv, strategy: :parallel)
 
 # Dump back to CSV
 CSV.dump_to_iodata([["a", "b"], ["1", "2"]])
-#=> "a,b\n1,2\n"
+#=> [["a,b\r\n"], ["1,2\r\n"]]
 ```
 
 ## NimbleCSV API Compatibility
@@ -188,7 +188,7 @@ All batch strategies share a single-pass SIMD structural scanner (`scan_structur
 
 **How it works:**
 
-1. Load 16-byte chunks (or 32-byte on AVX2) into SIMD registers
+1. Load 16-byte chunks into portable SIMD registers
 2. Compare against separator, quote, `\n`, and `\r` characters simultaneously
 3. Use **prefix-XOR** on the quote bitmask to determine which positions are inside quoted regions — a cumulative XOR where bit *i* is set if there's an odd number of quotes before position *i*
 4. Mask out quoted positions, then extract the remaining separator and newline positions into `Vec<u32>` arrays

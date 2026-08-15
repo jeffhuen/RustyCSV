@@ -7,14 +7,12 @@
 //! escapes").
 //!
 //! Scanning strategies:
-//!   SIMD:    portable_simd 16/32-byte vectorized comparison (fastest)
+//!   SIMD:    portable_simd 16-byte vectorized comparison (fastest)
 //!   General: byte-by-byte for multi-byte separator/escape patterns
 
 use std::simd::prelude::*;
 
 use crate::core::simd_scanner::CHUNK;
-#[cfg(target_feature = "avx2")]
-use crate::core::simd_scanner::WIDE;
 
 // ==========================================================================
 // Quoting: wrap field in escape chars, double internal escapes
@@ -120,22 +118,6 @@ impl ReservedPatterns {
 pub fn field_needs_quoting(field: &[u8], reserved: &ReservedPatterns) -> bool {
     let len = field.len();
     let mut pos = 0;
-
-    // AVX2 wide path: 32 bytes at a time
-    #[cfg(target_feature = "avx2")]
-    if let Some((&first, rest)) = reserved.single_bytes.split_first() {
-        while pos + WIDE <= len {
-            let chunk = Simd::<u8, WIDE>::from_slice(&field[pos..pos + WIDE]);
-            let mut hits = chunk.simd_eq(Simd::splat(first));
-            for &byte in rest {
-                hits |= chunk.simd_eq(Simd::splat(byte));
-            }
-            if hits.any() {
-                return true;
-            }
-            pos += WIDE;
-        }
-    }
 
     // 16-byte path
     if let Some((&first, rest)) = reserved.single_bytes.split_first() {

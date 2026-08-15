@@ -13,17 +13,16 @@
 //! ## Bitmask types
 //!
 //! On current nightly, `Mask::to_bitmask()` returns u64 regardless of lane
-//! count. We mask to the relevant bits (lower 16 for CHUNK=16, lower 32 for
-//! WIDE=32) and operate on u64 uniformly.
+//! count. We mask to the lower 16 bits for CHUNK=16 and operate on u64
+//! uniformly.
 //!
 //! ## Optimization notes
 //!
 //! - Uses `to_bitmask()` + bit extraction (not `.any()` + break) because we
 //!   need ALL structural positions, not just the first one per chunk.
 //! - Prefix-XOR for quote region detection: portable shift-and-xor cascade
-//!   for all targets, with CLMUL/PMULL fast paths on x86_64/aarch64.
-//! - AVX2 wide path (32 bytes) processes first, then 16-byte remainder,
-//!   then scalar tail. Same pattern as RustyJSON's skip_plain_string_bytes.
+//!   on all targets.
+//! - Processes 16-byte portable-SIMD chunks followed by a scalar tail.
 
 use std::simd::prelude::*;
 
@@ -31,10 +30,6 @@ use super::simd_index::{InputTooLarge, RowEnd, StructuralIndex, Violation};
 
 /// Baseline SIMD chunk size (128-bit).
 pub const CHUNK: usize = 16;
-
-/// Wide chunk size for AVX2 targets.
-#[cfg(target_feature = "avx2")]
-pub const WIDE: usize = 32;
 
 // ---------------------------------------------------------------------------
 // Prefix-XOR: compute cumulative XOR to determine quoted regions
@@ -44,8 +39,7 @@ pub const WIDE: usize = 32;
 // prefix_xor(mask) produces a bitmask where bit i is set if position i is
 // inside a quoted region (odd number of quotes before it).
 
-/// Prefix-XOR via shift-and-xor cascade (works for 16 and 32 bits
-/// within a u64, since upper bits are zero).
+/// Prefix-XOR via shift-and-xor cascade for the lower 16 bits of a u64.
 ///
 /// For these small bit widths the cascade is 6 dependent XOR+shift ops (~6 cycles),
 /// comparable to a single CLMUL/PMULL instruction (~3-4 cycle latency + setup).
@@ -234,67 +228,6 @@ pub fn scan_structural(
     let mut quote_carry: u64 = 0; // 0 or 1: parity of quotes seen so far
     let mut carry = QuoteCarry::at_start();
     let mut violation: Option<Violation> = None;
-
-    // -----------------------------------------------------------------------
-    // AVX2 wide path: 32-byte chunks
-    // -----------------------------------------------------------------------
-    #[cfg(target_feature = "avx2")]
-    {
-        let esc_splat = Simd::<u8, WIDE>::splat(escape);
-        let lf_splat = Simd::<u8, WIDE>::splat(b'\n');
-        let cr_splat = Simd::<u8, WIDE>::splat(b'\r');
-
-        let sep_splats: Vec<Simd<u8, WIDE>> = separators
-            .iter()
-            .map(|&s| Simd::<u8, WIDE>::splat(s))
-            .collect();
-
-        const MASK_32: u64 = (1u64 << 32) - 1;
-
-        while pos + WIDE <= input.len() {
-            let chunk = Simd::<u8, WIDE>::from_slice(&input[pos..pos + WIDE]);
-            let base = pos as u32;
-
-            let esc_mask = chunk.simd_eq(esc_splat).to_bitmask() & MASK_32;
-
-            let raw_quoted = prefix_xor(esc_mask) & MASK_32;
-            let quoted = raw_quoted ^ (quote_carry.wrapping_neg() & MASK_32);
-
-            quote_carry ^= (esc_mask.count_ones() as u64) & 1;
-
-            let not_quoted = !quoted & MASK_32;
-
-            let mut sep_bits: u64 = 0;
-            for splat in &sep_splats {
-                sep_bits |= chunk.simd_eq(*splat).to_bitmask() & MASK_32;
-            }
-
-            let lf_raw = chunk.simd_eq(lf_splat).to_bitmask() & MASK_32;
-            let cr_raw = chunk.simd_eq(cr_splat).to_bitmask() & MASK_32;
-
-            let masks = ChunkMasks {
-                esc: esc_mask,
-                quoted,
-                sep: sep_bits,
-                lf: lf_raw,
-                cr: cr_raw,
-            };
-            let next_is_lf = matches!(input.get(pos + WIDE), Some(&b) if b == b'\n');
-            let bad = check_quoting(WIDE as u32, &masks, next_is_lf, &mut carry);
-            record_violation(bad, esc_mask, base, &mut violation);
-
-            extract_positions(sep_bits & not_quoted, base, &mut field_seps);
-            emit_row_ends(
-                input,
-                pos,
-                lf_raw & not_quoted,
-                cr_raw & not_quoted,
-                &mut row_ends,
-            );
-
-            pos += WIDE;
-        }
-    }
 
     // -----------------------------------------------------------------------
     // 16-byte chunks
