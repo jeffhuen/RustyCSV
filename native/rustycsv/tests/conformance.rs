@@ -62,8 +62,6 @@ fn streaming_to_strings(input: &[u8], sep: u8) -> Vec<Vec<String>> {
     parser.feed(input).unwrap();
     let mut rows = parser.take_rows(usize::MAX);
     rows.extend(parser.finalize());
-    // Streaming skips empty rows, consistent with parallel.
-    // Filter for comparison.
     owned_to_strings(rows)
 }
 
@@ -72,8 +70,7 @@ fn streaming_to_strings(input: &[u8], sep: u8) -> Vec<Vec<String>> {
 // ---------------------------------------------------------------------------
 
 /// Runs a scenario through all single-byte-separator strategies and asserts
-/// they all produce `expected`. Strategies that skip empty rows (parallel,
-/// streaming) filter them from expected for comparison.
+/// they all produce `expected`.
 macro_rules! conformance {
     ($name:ident, input: $input:expr, sep: $sep:expr, expected: $expected:expr) => {
         #[test]
@@ -84,13 +81,6 @@ macro_rules! conformance {
             let expected_strings: Vec<Vec<String>> = expected
                 .iter()
                 .map(|row| row.iter().map(|s| s.to_string()).collect())
-                .collect();
-
-            // Strategies that skip empty rows
-            let expected_nonempty: Vec<Vec<String>> = expected_strings
-                .iter()
-                .filter(|row| !(row.len() == 1 && row[0].is_empty()))
-                .cloned()
                 .collect();
 
             // Direct
@@ -107,12 +97,12 @@ macro_rules! conformance {
             );
             assert_eq!(two_phase, expected_strings, "FAILED: two_phase");
 
-            // Parallel (skips empty rows)
+            // Parallel
             let parallel = owned_to_strings(
                 parse_csv_parallel_with_config(input, sep, b'"')
                     .expect("test input fits the structural index"),
             );
-            assert_eq!(parallel, expected_nonempty, "FAILED: parallel");
+            assert_eq!(parallel, expected_strings, "FAILED: parallel");
 
             // Zero-copy (preserves all rows including empty)
             let zc = boundaries_to_strings(
@@ -122,9 +112,9 @@ macro_rules! conformance {
             );
             assert_eq!(zc, expected_strings, "FAILED: zero_copy");
 
-            // Streaming (skips empty rows)
+            // Streaming
             let stream = streaming_to_strings(input, sep);
-            assert_eq!(stream, expected_nonempty, "FAILED: streaming");
+            assert_eq!(stream, expected_strings, "FAILED: streaming");
         }
     };
 }
@@ -241,12 +231,6 @@ macro_rules! conformance_multi_sep {
                 .map(|row| row.iter().map(|s| s.to_string()).collect())
                 .collect();
 
-            let expected_nonempty: Vec<Vec<String>> = expected_strings
-                .iter()
-                .filter(|row| !(row.len() == 1 && row[0].is_empty()))
-                .cloned()
-                .collect();
-
             // Direct
             let direct = cow_to_strings(
                 parse_csv_full_multi_sep(input, seps, b'"')
@@ -259,7 +243,7 @@ macro_rules! conformance_multi_sep {
                 parse_csv_parallel_multi_sep(input, seps, b'"')
                     .expect("test input fits the structural index"),
             );
-            assert_eq!(parallel, expected_nonempty, "FAILED: parallel multi_sep");
+            assert_eq!(parallel, expected_strings, "FAILED: parallel multi_sep");
 
             // Zero-copy
             let zc = boundaries_to_strings(
@@ -267,7 +251,7 @@ macro_rules! conformance_multi_sep {
                 parse_csv_boundaries_multi_sep(input, seps, b'"')
                     .expect("test input fits the structural index"),
             );
-            assert_eq!(zc, expected_nonempty, "FAILED: zero_copy multi_sep");
+            assert_eq!(zc, expected_strings, "FAILED: zero_copy multi_sep");
         }
     };
 }
@@ -305,12 +289,6 @@ macro_rules! conformance_general {
                 .map(|row| row.iter().map(|s| s.to_string()).collect())
                 .collect();
 
-            let expected_nonempty: Vec<Vec<String>> = expected_strings
-                .iter()
-                .filter(|row| !(row.len() == 1 && row[0].is_empty()))
-                .cloned()
-                .collect();
-
             // Direct
             let direct = cow_to_strings(parse_csv_general(input, &seps, &esc));
             assert_eq!(direct, expected_strings, "FAILED: general direct");
@@ -319,17 +297,17 @@ macro_rules! conformance_general {
             let indexed = cow_to_strings(parse_csv_indexed_general(input, &seps, &esc));
             assert_eq!(indexed, expected_strings, "FAILED: general indexed");
 
-            // Parallel (skips empty rows)
+            // Parallel
             let parallel = owned_to_strings(parse_csv_parallel_general(input, &seps, &esc));
-            assert_eq!(parallel, expected_nonempty, "FAILED: general parallel");
+            assert_eq!(parallel, expected_strings, "FAILED: general parallel");
 
-            // Boundaries (skips empty rows)
+            // Boundaries
             // Note: boundaries returns raw positions, verify count and field count
             let boundaries = parse_csv_boundaries_general(input, &seps, &esc)
                 .expect("test input fits the structural index");
             assert_eq!(
                 boundaries.rows.len(),
-                expected_nonempty.len(),
+                expected_strings.len(),
                 "FAILED: general boundaries row count"
             );
 
@@ -339,7 +317,7 @@ macro_rules! conformance_general {
             let mut rows = parser.take_rows(usize::MAX);
             rows.extend(parser.finalize());
             let stream = owned_to_strings(rows);
-            assert_eq!(stream, expected_nonempty, "FAILED: general streaming");
+            assert_eq!(stream, expected_strings, "FAILED: general streaming");
         }
     };
 }
@@ -370,12 +348,6 @@ macro_rules! conformance_custom_newline {
                 .map(|row| row.iter().map(|s| s.to_string()).collect())
                 .collect();
 
-            let expected_nonempty: Vec<Vec<String>> = expected_strings
-                .iter()
-                .filter(|row| !(row.len() == 1 && row[0].is_empty()))
-                .cloned()
-                .collect();
-
             // Direct with newlines
             let direct = cow_to_strings(parse_csv_general_with_newlines(input, &seps, &esc, &nl));
             assert_eq!(direct, expected_strings, "FAILED: custom_nl direct");
@@ -386,18 +358,18 @@ macro_rules! conformance_custom_newline {
             ));
             assert_eq!(indexed, expected_strings, "FAILED: custom_nl indexed");
 
-            // Parallel with newlines (skips empty rows)
+            // Parallel with newlines
             let parallel = owned_to_strings(parse_csv_parallel_general_with_newlines(
                 input, &seps, &esc, &nl,
             ));
-            assert_eq!(parallel, expected_nonempty, "FAILED: custom_nl parallel");
+            assert_eq!(parallel, expected_strings, "FAILED: custom_nl parallel");
 
             // Boundaries with newlines
             let boundaries = parse_csv_boundaries_general_with_newlines(input, &seps, &esc, &nl)
                 .expect("test input fits the structural index");
             assert_eq!(
                 boundaries.rows.len(),
-                expected_nonempty.len(),
+                expected_strings.len(),
                 "FAILED: custom_nl boundaries row count"
             );
 
@@ -408,7 +380,7 @@ macro_rules! conformance_custom_newline {
             let mut rows = parser.take_rows(usize::MAX);
             rows.extend(parser.finalize());
             let stream = owned_to_strings(rows);
-            assert_eq!(stream, expected_nonempty, "FAILED: custom_nl streaming");
+            assert_eq!(stream, expected_strings, "FAILED: custom_nl streaming");
         }
     };
 }

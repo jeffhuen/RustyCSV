@@ -1,6 +1,6 @@
 # RustyCSV Compliance & Validation
 
-RustyCSV takes correctness seriously. With **484 ExUnit tests** plus **131 Rust
+RustyCSV takes correctness seriously. With **494 ExUnit tests** plus **125 Rust
 tests**, including industry-standard validation suites used by CSV parsers
 across multiple languages, RustyCSV is one of the most thoroughly tested CSV
 libraries available for Elixir.
@@ -301,9 +301,9 @@ test/fixtures/
 
 | Gate | Result |
 |------|--------|
-| Rust unit tests | 120 passed |
+| Rust unit tests | 114 passed |
 | Rust conformance tests | 11 passed |
-| ExUnit | 484 passed, including 5 properties |
+| ExUnit | 494 passed, including 5 properties |
 | NimbleCSV v1.3.0 semantic suite | 21/21 passed |
 | NimbleCSV master semantic suite | 23/23 passed |
 | `cargo clippy -D warnings` | Passed |

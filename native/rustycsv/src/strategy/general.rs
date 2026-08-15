@@ -461,7 +461,7 @@ pub fn parse_csv_parallel_general(
     run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(start, end)| {
+            .map(|(start, end)| {
                 // Strip trailing line ending (\n or \r\n). Bare \r is data per RFC 4180.
                 let mut line_end = end;
                 if line_end > start && input[line_end - 1] == b'\n' {
@@ -471,19 +471,10 @@ pub fn parse_csv_parallel_general(
                     }
                 }
 
-                if line_end <= start {
-                    return None;
-                }
-
                 let line = &input[start..line_end];
                 let (fields, _) =
                     parse_line_fields_owned_general(line, &separators_vec, &escape_vec);
-
-                if fields.is_empty() || (fields.len() == 1 && fields[0].is_empty()) {
-                    None
-                } else {
-                    Some(fields)
-                }
+                fields
             })
             .collect()
     })
@@ -684,10 +675,6 @@ impl GeneralStreamingParser {
     }
 
     fn parse_row_owned(&self, start: usize, end: usize) -> (Vec<Vec<u8>>, Option<Violation>) {
-        if start >= end {
-            return (Vec::new(), None);
-        }
-
         let line = &self.buffer[start..end];
         parse_line_fields_owned_general(line, &self.separators, &self.escape)
     }
@@ -697,9 +684,7 @@ impl GeneralStreamingParser {
         if self.violation.is_none() {
             self.violation = violation.map(|v| v.rebase(self.buffer_offset + start));
         }
-        if !row.is_empty() {
-            self.complete_rows.push(row);
-        }
+        self.complete_rows.push(row);
     }
 
     fn compact_buffer(&mut self) {
@@ -739,18 +724,20 @@ impl GeneralStreamingParser {
         self.violation
     }
 
+    pub fn take_violation(&mut self) -> Option<Violation> {
+        self.violation.take()
+    }
+
     pub fn finalize(&mut self) -> Vec<Vec<Vec<u8>>> {
         if self.partial_row_start < self.buffer.len() {
             self.push_complete_row(self.partial_row_start, self.buffer.len());
         }
-        if self.violation.is_none() {
-            self.violation = self.quote.finish(self.buffer_offset + self.buffer.len());
-        }
         // Release the buffer — parsing is done
-        self.buffer_offset += self.buffer.len();
         self.buffer = Vec::new();
         self.partial_row_start = 0;
         self.scan_pos = 0;
+        self.buffer_offset = 0;
+        self.quote = QuoteState::new();
         std::mem::take(&mut self.complete_rows)
     }
 }
@@ -976,7 +963,7 @@ pub fn parse_csv_parallel_general_with_newlines(
     run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(start, end)| {
+            .map(|(start, end)| {
                 // Strip trailing newline pattern
                 let mut line_end = end;
                 for pattern in newlines_clone.patterns.iter() {
@@ -988,19 +975,10 @@ pub fn parse_csv_parallel_general_with_newlines(
                     }
                 }
 
-                if line_end <= start {
-                    return None;
-                }
-
                 let line = &input[start..line_end];
                 let (fields, _) =
                     parse_line_fields_owned_general(line, &separators_vec, &escape_vec);
-
-                if fields.is_empty() || (fields.len() == 1 && fields[0].is_empty()) {
-                    None
-                } else {
-                    Some(fields)
-                }
+                fields
             })
             .collect()
     })
@@ -1078,7 +1056,7 @@ pub fn parse_csv_parallel_boundaries_general(
     let parsed: Vec<ParsedBoundaryRow> = run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(start, end)| {
+            .map(|(start, end)| {
                 // Strip trailing line ending (\n or \r\n). Bare \r is data per RFC 4180.
                 let mut line_end = end;
                 if line_end > start && input[line_end - 1] == b'\n' {
@@ -1088,19 +1066,9 @@ pub fn parse_csv_parallel_boundaries_general(
                     }
                 }
 
-                if line_end <= start {
-                    return None;
-                }
-
                 let line = &input[start..line_end];
                 let (line_boundaries, violation) =
                     parse_line_boundaries_general(line, &separators_vec, &escape_vec);
-
-                if line_boundaries.is_empty()
-                    || (line_boundaries.len() == 1 && line_boundaries[0].0 >= line_boundaries[0].1)
-                {
-                    return None;
-                }
 
                 // Adjust offsets from line-relative to input-relative
                 let adjusted: Vec<(usize, usize)> = line_boundaries
@@ -1108,7 +1076,7 @@ pub fn parse_csv_parallel_boundaries_general(
                     .map(|(s, e)| (s + start, e + start))
                     .collect();
 
-                Some((adjusted, violation.map(|v| v.rebase(start))))
+                (adjusted, violation.map(|v| v.rebase(start)))
             })
             .collect()
     });
@@ -1157,7 +1125,7 @@ pub fn parse_csv_parallel_boundaries_general_with_newlines(
     let parsed: Vec<ParsedBoundaryRow> = run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(start, end)| {
+            .map(|(start, end)| {
                 // Strip trailing newline pattern
                 let mut line_end = end;
                 for pattern in newlines_clone.patterns.iter() {
@@ -1169,19 +1137,9 @@ pub fn parse_csv_parallel_boundaries_general_with_newlines(
                     }
                 }
 
-                if line_end <= start {
-                    return None;
-                }
-
                 let line = &input[start..line_end];
                 let (line_boundaries, violation) =
                     parse_line_boundaries_general(line, &separators_vec, &escape_vec);
-
-                if line_boundaries.is_empty()
-                    || (line_boundaries.len() == 1 && line_boundaries[0].0 >= line_boundaries[0].1)
-                {
-                    return None;
-                }
 
                 // Adjust offsets from line-relative to input-relative
                 let adjusted: Vec<(usize, usize)> = line_boundaries
@@ -1189,7 +1147,7 @@ pub fn parse_csv_parallel_boundaries_general_with_newlines(
                     .map(|(s, e)| (s + start, e + start))
                     .collect();
 
-                Some((adjusted, violation.map(|v| v.rebase(start))))
+                (adjusted, violation.map(|v| v.rebase(start)))
             })
             .collect()
     });
@@ -1391,10 +1349,6 @@ impl GeneralStreamingParserNewlines {
     }
 
     fn parse_row_owned(&self, start: usize, end: usize) -> (Vec<Vec<u8>>, Option<Violation>) {
-        if start >= end {
-            return (Vec::new(), None);
-        }
-
         let line = &self.buffer[start..end];
         parse_line_fields_owned_general(line, &self.separators, &self.escape)
     }
@@ -1404,9 +1358,7 @@ impl GeneralStreamingParserNewlines {
         if self.violation.is_none() {
             self.violation = violation.map(|v| v.rebase(self.buffer_offset + start));
         }
-        if !row.is_empty() {
-            self.complete_rows.push(row);
-        }
+        self.complete_rows.push(row);
     }
 
     fn compact_buffer(&mut self) {
@@ -1446,18 +1398,20 @@ impl GeneralStreamingParserNewlines {
         self.violation
     }
 
+    pub fn take_violation(&mut self) -> Option<Violation> {
+        self.violation.take()
+    }
+
     pub fn finalize(&mut self) -> Vec<Vec<Vec<u8>>> {
         if self.partial_row_start < self.buffer.len() {
             self.push_complete_row(self.partial_row_start, self.buffer.len());
         }
-        if self.violation.is_none() {
-            self.violation = self.quote.finish(self.buffer_offset + self.buffer.len());
-        }
         // Release the buffer — parsing is done
-        self.buffer_offset += self.buffer.len();
         self.buffer = Vec::new();
         self.partial_row_start = 0;
         self.scan_pos = 0;
+        self.buffer_offset = 0;
+        self.quote = QuoteState::new();
         std::mem::take(&mut self.complete_rows)
     }
 }

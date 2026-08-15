@@ -369,7 +369,6 @@ defmodule RustyCSV do
   ## Streaming Options
 
     * `:chunk_size` - Bytes per IO read for streaming. Defaults to `65536`.
-    * `:batch_size` - Rows per batch for streaming. Defaults to `1000`.
     * `:max_buffer_size` - Maximum streaming buffer size in bytes. Defaults to
       `268_435_456` (256 MB). If the internal buffer exceeds this limit during
       `streaming_feed/2`, a `:buffer_overflow` exception is raised. Increase
@@ -383,7 +382,6 @@ defmodule RustyCSV do
           strategy: strategy(),
           headers: boolean() | [atom() | String.t()],
           chunk_size: pos_integer(),
-          batch_size: pos_integer(),
           max_buffer_size: pos_integer()
         ]
 
@@ -614,9 +612,10 @@ defmodule RustyCSV do
 
     * `:escape_formula` - A map of characters to their escaped versions
       for preventing CSV formula injection. When set, fields starting with
-      these characters will be prefixed with a tab. Defaults to `nil`.
+      these characters are prefixed with the configured replacement. Defaults
+      to `nil`.
 
-      Example: `%{"=" => true, "+" => true, "-" => true, "@" => true}`
+      Example: `%{["=", "+", "-", "@"] => "'"}`
 
   ### Strategy Options
 
@@ -699,8 +698,13 @@ defmodule RustyCSV do
     newlines = Keyword.get(options, :newlines, ["\r\n", "\n"])
     trim_bom = Keyword.get(options, :trim_bom, false)
     dump_bom = Keyword.get(options, :dump_bom, false)
-    reserved = Keyword.get(options, :reserved, [])
-    reserved_binaries = Enum.map(reserved, &normalize_codepoint/1)
+
+    reserved =
+      Keyword.get_lazy(options, :reserved, fn ->
+        [escape, line_separator] ++ separator_list ++ newlines
+      end)
+
+    reserved_binaries = validate_reserved!(reserved)
     escape_formula = Keyword.get(options, :escape_formula, nil)
     default_strategy = Keyword.get(options, :strategy, :simd)
     moduledoc = Keyword.get(options, :moduledoc)
@@ -709,6 +713,7 @@ defmodule RustyCSV do
     encoding = Keyword.get(options, :encoding, :utf8)
     validate_encoding!(encoding)
     bom = :unicode.encoding_to_bom(encoding)
+    encoded_newlines = Enum.map(newlines, &:unicode.characters_to_binary(&1, :utf8, encoding))
 
     stored_options = options
 
@@ -719,6 +724,7 @@ defmodule RustyCSV do
       escape_binary: escape_binary,
       line_separator: line_separator,
       newlines: newlines,
+      encoded_newlines: encoded_newlines,
       trim_bom: trim_bom,
       dump_bom: dump_bom,
       escape_formula: escape_formula,
@@ -782,6 +788,18 @@ defmodule RustyCSV do
             "Supported: :utf8, :latin1, {:utf16, :little}, {:utf16, :big}, {:utf32, :little}, {:utf32, :big}"
   end
 
+  defp validate_reserved!(reserved) when is_list(reserved) do
+    Enum.map(reserved, fn pattern ->
+      pattern = normalize_codepoint(pattern)
+      validate_non_empty!(:reserved, pattern)
+      pattern
+    end)
+  end
+
+  defp validate_reserved!(_reserved) do
+    raise ArgumentError, "RustyCSV reserved must be a list of non-empty binaries"
+  end
+
   # ==========================================================================
   # Private: Module Compilation
   # ==========================================================================
@@ -816,8 +834,9 @@ defmodule RustyCSV do
     replacement_bin = if is_binary(replacement), do: replacement, else: to_string(replacement)
 
     Enum.map(prefixes, fn prefix ->
-      <<first_byte, _rest::binary>> = prefix
-      {first_byte, replacement_bin}
+      prefix = normalize_codepoint(prefix)
+      validate_non_empty!(:escape_formula, prefix)
+      {prefix, replacement_bin}
     end)
   end
 
@@ -832,6 +851,7 @@ defmodule RustyCSV do
       @escape_binary unquote(Macro.escape(config.escape_binary))
       @line_separator unquote(Macro.escape(config.line_separator))
       @newlines unquote(Macro.escape(config.newlines))
+      @encoded_newlines unquote(Macro.escape(config.encoded_newlines))
       @newlines_nif unquote(
                       Macro.escape(
                         if config.newlines == ["\r\n", "\n"] do
@@ -1114,7 +1134,6 @@ defmodule RustyCSV do
           * `[atom | string, ...]` - Use explicit keys, return maps.
             First row skipped by default; pass `skip_headers: false` if no header row.
         * `:chunk_size` - Bytes per IO read. Defaults to `65536`.
-        * `:batch_size` - Rows per batch. Defaults to `1000`.
         * `:max_buffer_size` - Maximum streaming buffer size in bytes.
           Defaults to `268_435_456` (256 MB). Raises if exceeded during parsing.
 
@@ -1126,7 +1145,6 @@ defmodule RustyCSV do
       def parse_stream(stream, opts) when is_list(opts) do
         headers = Keyword.get(opts, :headers, false)
         chunk_size = Keyword.get(opts, :chunk_size, 64 * 1024)
-        batch_size = Keyword.get(opts, :batch_size, 1000)
         strict = Keyword.get(opts, :strict, true)
 
         unless is_boolean(strict) do
@@ -1136,7 +1154,6 @@ defmodule RustyCSV do
 
         stream_opts = [
           chunk_size: chunk_size,
-          batch_size: batch_size,
           separator: @separator_binaries,
           escape: @escape_binary,
           newlines: @newlines_nif,
@@ -1236,7 +1253,7 @@ defmodule RustyCSV do
       @impl RustyCSV
       @spec to_line_stream(Enumerable.t()) :: Enumerable.t()
       def to_line_stream(stream) do
-        newline = :binary.compile_pattern(@newlines)
+        newline = :binary.compile_pattern(@encoded_newlines)
 
         stream
         |> Stream.chunk_while(
@@ -1357,9 +1374,15 @@ defmodule RustyCSV do
   defp quoted_dump_retry_helpers do
     quote do
       defp retry_with_coerced_fields({:error, :non_binary_field}, rows, strategy) do
-        rows
-        |> coerce_fields_to_binary()
+        coerced_rows = coerce_fields_to_binary(rows)
+
+        coerced_rows
         |> encode_rows_nif(strategy)
+        |> retry_with_coerced_fields(coerced_rows, strategy)
+      end
+
+      defp retry_with_coerced_fields({:error, :encoding_error}, _rows, _strategy) do
+        raise "error converting :utf8 to #{inspect(@encoding)}"
       end
 
       defp retry_with_coerced_fields(result, _rows, _strategy), do: result
@@ -1390,13 +1413,8 @@ defmodule RustyCSV do
       end
 
       defp encode_single_row_nif(row) do
-        case encode_rows_nif([row], nil) do
-          {:error, :non_binary_field} ->
-            encode_rows_nif([coerce_row_fields_to_binary(row)], nil)
-
-          result ->
-            result
-        end
+        encode_rows_nif([row], nil)
+        |> retry_with_coerced_fields([row], nil)
       end
     end
   end
@@ -1445,7 +1463,7 @@ RustyCSV.define(RustyCSV.RFC4180,
 
       CSV.dump_to_iodata([["name", "age"], ["john", "27"]])
       |> IO.iodata_to_binary()
-      #=> "name,age\njohn,27\n"
+      #=> "name,age\r\njohn,27\r\n"
 
   ## Configuration
 
@@ -1454,7 +1472,7 @@ RustyCSV.define(RustyCSV.RFC4180,
       RustyCSV.define(RustyCSV.RFC4180,
         separator: ",",
         escape: "\"",
-        line_separator: "\n",
+        line_separator: "\r\n",
         newlines: ["\r\n", "\n"],
         strategy: :simd
       )

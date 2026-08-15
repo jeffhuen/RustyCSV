@@ -100,12 +100,8 @@ pub fn parse_csv_parallel_with_config(
     Ok(run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(rs, re, sep_lo, sep_hi)| {
+            .map(|(rs, re, sep_lo, sep_hi)| {
                 let (row_start, content_end) = (rs as usize, re as usize);
-                if content_end <= row_start {
-                    return None;
-                }
-
                 let seps = &field_seps[sep_lo..sep_hi];
                 let mut fields = Vec::with_capacity(seps.len() + 1);
                 let mut pos = row_start;
@@ -125,11 +121,7 @@ pub fn parse_csv_parallel_with_config(
                     escape,
                 ));
 
-                if fields.len() == 1 && fields[0].is_empty() {
-                    None
-                } else {
-                    Some(fields)
-                }
+                fields
             })
             .collect()
     }))
@@ -168,12 +160,8 @@ pub fn parse_csv_parallel_multi_sep(
     Ok(run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(rs, re, sep_lo, sep_hi)| {
+            .map(|(rs, re, sep_lo, sep_hi)| {
                 let (row_start, content_end) = (rs as usize, re as usize);
-                if content_end <= row_start {
-                    return None;
-                }
-
                 let seps = &field_seps[sep_lo..sep_hi];
                 let mut fields = Vec::with_capacity(seps.len() + 1);
                 let mut pos = row_start;
@@ -193,11 +181,7 @@ pub fn parse_csv_parallel_multi_sep(
                     escape,
                 ));
 
-                if fields.len() == 1 && fields[0].is_empty() {
-                    None
-                } else {
-                    Some(fields)
-                }
+                fields
             })
             .collect()
     }))
@@ -241,12 +225,8 @@ pub fn parse_csv_parallel_boundaries_with_config(
     let rows = run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(rs, re, sep_lo, sep_hi)| {
+            .map(|(rs, re, sep_lo, sep_hi)| {
                 let (row_start, content_end) = (rs as usize, re as usize);
-                if content_end <= row_start {
-                    return None;
-                }
-
                 let seps = &field_seps[sep_lo..sep_hi];
                 let mut fields = Vec::with_capacity(seps.len() + 1);
                 let mut pos = row_start;
@@ -256,11 +236,7 @@ pub fn parse_csv_parallel_boundaries_with_config(
                 }
                 fields.push((pos, content_end));
 
-                if fields.len() == 1 && fields[0].0 >= fields[0].1 {
-                    None
-                } else {
-                    Some(fields)
-                }
+                fields
             })
             .collect()
     });
@@ -304,12 +280,8 @@ pub fn parse_csv_parallel_boundaries_multi_sep(
     let rows = run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .filter_map(|(rs, re, sep_lo, sep_hi)| {
+            .map(|(rs, re, sep_lo, sep_hi)| {
                 let (row_start, content_end) = (rs as usize, re as usize);
-                if content_end <= row_start {
-                    return None;
-                }
-
                 let seps = &field_seps[sep_lo..sep_hi];
                 let mut fields = Vec::with_capacity(seps.len() + 1);
                 let mut pos = row_start;
@@ -319,11 +291,7 @@ pub fn parse_csv_parallel_boundaries_multi_sep(
                 }
                 fields.push((pos, content_end));
 
-                if fields.len() == 1 && fields[0].0 >= fields[0].1 {
-                    None
-                } else {
-                    Some(fields)
-                }
+                fields
             })
             .collect()
     });

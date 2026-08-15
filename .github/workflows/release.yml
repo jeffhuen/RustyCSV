@@ -40,7 +40,7 @@ jobs:
           - { target: x86_64-pc-windows-msvc      , os: windows-2022 , variant: avx2 }
 
     env:
-      RUSTUP_TOOLCHAIN: nightly
+      RUSTUP_TOOLCHAIN: nightly-2026-07-27
 
     steps:
       - name: Checkout source code
@@ -64,6 +64,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-07-27
           targets: ${{ matrix.job.target }}
 
       - name: Set RUSTFLAGS for AVX2 variant

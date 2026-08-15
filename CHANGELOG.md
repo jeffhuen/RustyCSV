@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-08-14
+
+This release primarily improves correctness, native-code safety, and source-build
+reliability. It closes the remaining NimbleCSV 1.3.0 parity gaps found after
+0.4.0 without changing parsing or encoding function signatures or well-formed
+default CSV output.
+
+### Fixed
+
+- Included the Criterion benchmark target in the Hex source package so
+  `FORCE_RUSTYCSV_BUILD`, unsupported targets, offline builds, and other
+  source-build paths can parse the Cargo manifest and compile successfully.
+- Accepted valid streaming input whose final row ends in a doubled quote without
+  a trailing newline, across single-byte, multi-byte, and custom-newline parsers.
+- Preserved blank rows consistently in parallel and streaming parsers.
+- Kept high-level enumerable streaming bounded by draining every completed native
+  row after each input chunk instead of allowing the native row queue to grow.
+- Routed file and device streams through the same chunk converter as enumerable
+  streams, fixing device reads that ended mid-row and honoring encoding/BOM options.
+- Restored NimbleCSV dump behavior for custom newlines, multiple and mixed-width
+  separators, full multi-byte reserved patterns, and full Unicode formula prefixes.
+- Made `to_line_stream/1` recognize newline bytes in the parser's configured
+  encoding.
+- Non-UTF-8 dumping now raises for invalid UTF-8 and characters that cannot be
+  represented in Latin-1 instead of emitting corrupt or substituted output.
+- Cleared strict violations when a native streaming parser is finalized, allowing
+  the resource to be reused without leaking an old error into later input.
+
+### Changed
+
+- Raised the minimum supported Elixir version to 1.18.
+- Removed the `:batch_size` streaming option. Streaming now drains every completed
+  native row after each bounded input chunk so queued rows cannot grow without bound.
+- Removed the unused `start_permanent` Mix setting. RustyCSV owns no application
+  callback or supervision tree, so this application-level failure policy did not
+  belong in the library package.
+
+### Internal hardening
+
+- Denied new production uses of explicit panic macros, `unwrap`, `expect`,
+  `todo`, `unimplemented`, and `unreachable` at compile time.
+- Denied new unsafe Rust outside the documented, feature-gated tracking
+  allocator boundary.
+- Kept release panic unwinding explicit for Rustler's panic-catching boundary;
+  this does not claim recovery from arbitrary native crashes.
+- Moved all streaming resource locks onto dirty CPU schedulers.
+- Pinned the Rust nightly used by source, CI, and release builds.
+- Replaced the unconditional Windows AVX2 assumption with Windows' processor
+  feature check, retaining the optimized binary with safe baseline fallback.
+
+### Verification
+
+- Expanded CI to cover Elixir 1.18/OTP 27 through Elixir 1.20/OTP 29 and run both
+  default-feature and all-feature, lockfile-enforced Rust quality gates.
+- Added a CI and release gate that builds Rust directly from the unpacked Hex
+  package, catching missing packaged native sources before publication.
+- Added Hex package-retirement and RustSec advisory checks to the release process.
+
 ## [0.4.0] - 2026-08-13
 
 This is a NimbleCSV 1.3.0 decoding and encoding parity release. It closes the

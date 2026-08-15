@@ -4,26 +4,49 @@
 
 1. Update version in `mix.exs` and `native/rustycsv/Cargo.toml`
 2. Update `CHANGELOG.md`
-3. Commit: `git commit -am "Bump version to x.y.z"`
-4. Push to main: `git push origin main`
-5. Trigger NIF build: `gh workflow run release.yml --field version=x.y.z`
-6. **Wait for ALL 45 builds to complete** (~5-10 min)
+3. Run the release gates against the final release tree:
+   ```bash
+   cargo +nightly-2026-07-27 fmt --all --check --manifest-path native/rustycsv/Cargo.toml
+   cargo +nightly-2026-07-27 clippy --manifest-path native/rustycsv/Cargo.toml --workspace --all-targets --locked -- -D warnings
+   cargo +nightly-2026-07-27 clippy --manifest-path native/rustycsv/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
+   cargo +nightly-2026-07-27 test --manifest-path native/rustycsv/Cargo.toml --workspace --locked
+   cargo +nightly-2026-07-27 test --manifest-path native/rustycsv/Cargo.toml --workspace --all-features --locked
+   rustup component add --toolchain nightly-2026-07-27 miri rust-src
+   cargo +nightly-2026-07-27 miri test --manifest-path native/rustycsv/Cargo.toml --no-default-features core::
+   cargo +nightly-2026-07-27 miri test --manifest-path native/rustycsv/Cargo.toml --no-default-features strategy::encode::tests
+   FORCE_RUSTYCSV_BUILD=true mix format --check-formatted
+   FORCE_RUSTYCSV_BUILD=true MIX_ENV=test mix compile --force --warnings-as-errors
+   FORCE_RUSTYCSV_BUILD=true MIX_ENV=test mix test
+   FORCE_RUSTYCSV_BUILD=true mix credo --strict
+   FORCE_RUSTYCSV_BUILD=true mix dialyzer
+   FORCE_RUSTYCSV_BUILD=true mix docs --warnings-as-errors
+   mix hex.audit
+   cargo audit --file native/rustycsv/Cargo.lock
+   package_dir="$(mktemp -d)"
+   mix hex.build --unpack --output "$package_dir"
+   cargo +nightly-2026-07-27 build --release --locked --manifest-path "$package_dir/native/rustycsv/Cargo.toml"
+   ```
+4. Review `git status --short`, stage the intended files explicitly, and commit:
+   `git commit -m "Prepare vx.y.z"`
+5. Push to main: `git push origin main`
+6. Trigger NIF build: `gh workflow run release.yml --field version=x.y.z`
+7. **Wait for ALL 45 builds to complete** (~5-10 min)
    ```bash
    gh run watch <run-id>
    ```
-7. Verify draft release has 45 assets:
+8. Verify draft release has 45 assets:
    ```bash
    gh release view vx.y.z --json assets --jq '.assets | length'
    ```
-8. Publish draft release (assets must be public before checksums can be generated):
+9. Publish draft release (assets must be public before checksums can be generated):
    ```bash
    gh release edit vx.y.z --draft=false
    ```
-9. Clear checksum and generate new checksums: `rm -f checksum-Elixir.RustyCSV.Native.exs && FORCE_RUSTYCSV_BUILD=1 mix compile && mix rustler_precompiled.download RustyCSV.Native --all --print`
+10. Clear checksum and generate new checksums: `rm -f checksum-Elixir.RustyCSV.Native.exs && FORCE_RUSTYCSV_BUILD=1 mix compile && mix rustler_precompiled.download RustyCSV.Native --all --print`
 
-10. Commit checksums: `git add checksum-Elixir.RustyCSV.Native.exs && git commit -m "Add vx.y.z checksums" && git push`
+11. Commit checksums: `git add checksum-Elixir.RustyCSV.Native.exs && git commit -m "Add vx.y.z checksums" && git push`
 
-11. Publish to Hex: `mix hex.publish`
+12. Publish to Hex: `mix hex.publish`
 
 ## Important Notes
 

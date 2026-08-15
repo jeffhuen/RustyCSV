@@ -1,6 +1,6 @@
 [package]
 name = "rustycsv"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Jeff Huen"]
 edition = "2021"
 
@@ -29,11 +29,15 @@ harness = false
 mimalloc = { version = "0.1.52", default-features = false, optional = true, features = ["local_dynamic_tls"] }
 
 [lints.rust]
+unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
 missing_safety_doc = "deny"
+
+[profile.release]
+panic = "unwind"
 
 [features]
 default = ["mimalloc"]

@@ -3,7 +3,7 @@
 **Ultra-fast CSV parsing and encoding for Elixir.** A purpose-built Rust NIF with SIMD acceleration, parallel parsing, and bounded-memory streaming. Drop-in replacement for NimbleCSV.
 
 [![Hex.pm](https://img.shields.io/hexpm/v/rusty_csv.svg)](https://hex.pm/packages/rusty_csv)
-[![Tests](https://img.shields.io/badge/tests-484%20ExUnit%20%2B%20131%20Rust-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-494%20ExUnit%20%2B%20125%20Rust-brightgreen.svg)]()
 [![RFC 4180](https://img.shields.io/badge/RFC%204180-compliant-blue.svg)]()
 
 ## Why RustyCSV?
@@ -41,7 +41,7 @@
 | **High-performance allocator** | ✅ mimalloc | System |
 | **Drop-in replacement** | ✅ Same API | - |
 | **Headers-to-maps** | ✅ `headers: true` or explicit keys | ❌ |
-| **RFC 4180 compliant** | ✅ 484 ExUnit + 131 Rust tests | ✅ |
+| **RFC 4180 compliant** | ✅ 494 ExUnit + 125 Rust tests | ✅ |
 | **[Benchmark (7MB CSV)](https://rusty-csv.hexdocs.pm/benchmark.html#large-csv-6-82-mb-100k-rows)** | ~20ms | ~233ms |
 
 ## Purpose-Built for Elixir
@@ -93,7 +93,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.4.0"}]
+  [{:rusty_csv, "~> 0.4.1"}]
 end
 ```
 
@@ -340,7 +340,8 @@ RustyCSV is **fully RFC 4180 compliant** and validated against industry-standard
 | Custom newlines | 18 | ✅ All pass |
 | Streaming safety | 12 | ✅ All pass |
 | Concurrent access | 7 | ✅ All pass |
-| **ExUnit suite total** | **484** | ✅ |
+| 0.4.1 parity regressions | 10 | ✅ All pass |
+| **ExUnit suite total** | **494** | ✅ |
 
 See [Compliance and Validation](https://rusty-csv.hexdocs.pm/compliance.html) for full details.
 
@@ -582,7 +583,7 @@ mix deps.get
 # Compile (includes Rust NIF)
 mix compile
 
-# Run tests (484 ExUnit tests)
+# Run tests (494 ExUnit tests)
 mix test
 
 # Run benchmarks

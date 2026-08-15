@@ -190,10 +190,6 @@ impl StreamingParser {
 
     /// Parse a row from buffer range into owned fields
     fn parse_row_owned(&self, start: usize, end: usize) -> (Vec<Vec<u8>>, Option<Violation>) {
-        if start >= end {
-            return (Vec::new(), None);
-        }
-
         let line = &self.buffer[start..end];
         let mut fields = Vec::new();
         let mut pos = 0;
@@ -248,9 +244,7 @@ impl StreamingParser {
         if self.violation.is_none() {
             self.violation = violation.map(|v| v.rebase(self.buffer_offset + start));
         }
-        if !row.is_empty() {
-            self.complete_rows.push(row);
-        }
+        self.complete_rows.push(row);
     }
 
     /// Compact buffer by removing already-processed data
@@ -301,22 +295,23 @@ impl StreamingParser {
         self.violation
     }
 
+    pub fn take_violation(&mut self) -> Option<Violation> {
+        self.violation.take()
+    }
+
     /// Finalize parsing - treat any remaining data as the last row
     pub fn finalize(&mut self) -> Vec<Vec<Vec<u8>>> {
         // Process any remaining partial row
         if self.partial_row_start < self.buffer.len() {
             self.push_complete_row(self.partial_row_start, self.buffer.len());
         }
-        if self.violation.is_none() {
-            self.violation = self.quote.finish(self.buffer_offset + self.buffer.len());
-        }
 
         // Release the buffer — parsing is done, no need to hold this memory
-        self.buffer_offset += self.buffer.len();
         self.buffer = Vec::new();
         self.partial_row_start = 0;
         self.buffer_offset = 0;
         self.scan_pos = 0;
+        self.quote = QuoteState::new();
 
         // Take all remaining rows
         std::mem::take(&mut self.complete_rows)

@@ -72,6 +72,14 @@ impl StreamingParserEnum {
         }
     }
 
+    pub fn take_violation(&mut self) -> Option<Violation> {
+        match self {
+            StreamingParserEnum::SingleByte(p) => p.take_violation(),
+            StreamingParserEnum::General(p) => p.take_violation(),
+            StreamingParserEnum::GeneralNewlines(p) => p.take_violation(),
+        }
+    }
+
     pub fn finalize(&mut self) -> Vec<Vec<Vec<u8>>> {
         match self {
             StreamingParserEnum::SingleByte(p) => p.finalize(),

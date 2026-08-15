@@ -1,5 +1,15 @@
 #![feature(portable_simd)]
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
 //! RustyCSV - Fast CSV parsing with multiple strategies
 //!
 //! NIF safety: no unwrap/expect in production code. Fallible paths use match + early return.
@@ -28,6 +38,7 @@ mod atoms {
         trailing_garbage,
         unterminated_quote,
         non_binary_field,
+        encoding_error,
     }
 }
 
@@ -56,6 +67,19 @@ fn guard_input_size<'a>(env: Env<'a>, input: &[u8]) -> Result<(), Term<'a>> {
 fn decode_field_binary<'a>(env: Env<'a>, term: Term<'a>) -> Result<Binary<'a>, Term<'a>> {
     term.decode()
         .map_err(|_| (atoms::error(), atoms::non_binary_field()).encode(env))
+}
+
+fn encoding_error_term<'a>(env: Env<'a>) -> Term<'a> {
+    (atoms::error(), atoms::encoding_error()).encode(env)
+}
+
+macro_rules! encode_or_return {
+    ($env:expr, $result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(_) => return Ok(encoding_error_term($env)),
+        }
+    };
 }
 
 /// Separators: list of patterns. Each pattern can be multi-byte.
@@ -162,13 +186,12 @@ fn lock_parser(
 }
 
 use strategy::{
-    contains_escape, field_needs_quoting_general, field_needs_quoting_simd,
-    field_needs_quoting_simd_multi_sep, parse_csv_boundaries_general,
+    contains_escape, field_needs_quoting, parse_csv_boundaries_general,
     parse_csv_boundaries_general_with_newlines, parse_csv_boundaries_multi_sep,
     parse_csv_boundaries_with_config, parse_csv_parallel_boundaries,
     parse_csv_parallel_boundaries_general, parse_csv_parallel_boundaries_general_with_newlines,
     parse_csv_parallel_boundaries_multi_sep, parse_csv_parallel_boundaries_with_config,
-    unescape_field_general,
+    unescape_field_general, ReservedPatterns,
 };
 use term::{
     boundaries_to_maps_hybrid, boundaries_to_maps_hybrid_general, boundaries_to_term_hybrid,
@@ -225,6 +248,10 @@ fn scanned_boundaries_to_term<'a>(
 
 // When memory_tracking is enabled, wrap the allocator to track usage
 #[cfg(feature = "memory_tracking")]
+#[expect(
+    unsafe_code,
+    reason = "GlobalAlloc requires unsafe methods; this module is the documented allocator boundary"
+)]
 mod tracking {
     use std::alloc::{GlobalAlloc, Layout};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -580,8 +607,9 @@ fn streaming_finalize<'a>(env: Env<'a>, parser: StreamingParserRef) -> NifResult
     let strict = parser.strict;
     let mut inner = lock_parser(&parser)?;
     let rows = inner.finalize();
+    let violation = inner.take_violation();
     if strict {
-        if let Some(violation) = inner.violation() {
+        if let Some(violation) = violation {
             return Ok(malformed_csv_term(env, violation));
         }
     }
@@ -589,7 +617,7 @@ fn streaming_finalize<'a>(env: Env<'a>, parser: StreamingParserRef) -> NifResult
 }
 
 /// Get streaming parser status (available_rows, buffer_size, has_partial)
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn streaming_status(parser: StreamingParserRef) -> NifResult<(usize, usize, bool)> {
     let inner = lock_parser(&parser)?;
     Ok((
@@ -601,7 +629,7 @@ fn streaming_status(parser: StreamingParserRef) -> NifResult<(usize, usize, bool
 
 /// Set the maximum buffer size (in bytes) for the streaming parser.
 /// Default is 256 MB. Raises on overflow during `streaming_feed/2`.
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn streaming_set_max_buffer(parser: StreamingParserRef, max: usize) -> NifResult<Atom> {
     let mut inner = lock_parser(&parser)?;
     inner.set_max_buffer_size(max);
@@ -1031,9 +1059,9 @@ fn decode_line_separator<'a>(term: Term<'a>) -> NifResult<Vec<u8>> {
 use strategy::encoding::EncodingTarget;
 
 /// Configuration for formula injection prevention.
-/// Each rule maps a trigger byte (first byte of a field) to a replacement prefix.
+/// Each rule maps a field prefix to a replacement prefix.
 struct FormulaConfig {
-    rules: Vec<(u8, Vec<u8>)>,
+    rules: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 impl FormulaConfig {
@@ -1045,16 +1073,12 @@ impl FormulaConfig {
         self.rules.is_empty()
     }
 
-    /// Check if a field's first byte triggers a formula rule.
+    /// Check if a field starts with a configured formula prefix.
     /// Returns the replacement prefix if triggered, None otherwise.
     #[inline(always)]
     fn check(&self, field: &[u8]) -> Option<&[u8]> {
-        if field.is_empty() {
-            return None;
-        }
-        let first = field[0];
         for (trigger, replacement) in &self.rules {
-            if first == *trigger {
+            if field.starts_with(trigger) {
                 return Some(replacement);
             }
         }
@@ -1064,7 +1088,7 @@ impl FormulaConfig {
 
 /// Decode formula config from an Elixir term.
 /// - `nil` atom → FormulaConfig::none()
-/// - list of `{byte, binary}` tuples → FormulaConfig with rules
+/// - list of `{binary, binary}` tuples → FormulaConfig with rules
 fn decode_formula_config<'a>(term: Term<'a>) -> NifResult<FormulaConfig> {
     // Check for nil atom
     if let Ok(s) = term.atom_to_string() {
@@ -1074,7 +1098,7 @@ fn decode_formula_config<'a>(term: Term<'a>) -> NifResult<FormulaConfig> {
         return Err(Error::BadArg);
     }
 
-    // Decode as list of {integer, binary} tuples
+    // Decode as list of {binary, binary} tuples
     let list: ListIterator<'a> = term.decode().map_err(|_| Error::BadArg)?;
     let mut rules = Vec::new();
     for item in list {
@@ -1082,9 +1106,12 @@ fn decode_formula_config<'a>(term: Term<'a>) -> NifResult<FormulaConfig> {
         if tuple.len() != 2 {
             return Err(Error::BadArg);
         }
-        let trigger: u8 = tuple[0].decode().map_err(|_| Error::BadArg)?;
+        let trigger: Binary<'a> = tuple[0].decode().map_err(|_| Error::BadArg)?;
         let replacement: Binary<'a> = tuple[1].decode().map_err(|_| Error::BadArg)?;
-        rules.push((trigger, replacement.as_slice().to_vec()));
+        if trigger.as_slice().is_empty() {
+            return Err(Error::BadArg);
+        }
+        rules.push((trigger.as_slice().to_vec(), replacement.as_slice().to_vec()));
     }
     Ok(FormulaConfig { rules })
 }
@@ -1123,23 +1150,18 @@ fn decode_encoding_target(term: Term) -> NifResult<EncodingTarget> {
     }
 }
 
-/// Decode reserved characters from an Erlang list of single-byte binaries.
-/// Returns a Vec<u8> of bytes that should trigger quoting.
-fn decode_reserved<'a>(term: Term<'a>) -> NifResult<Vec<u8>> {
+/// Decode reserved patterns that should trigger quoting.
+fn decode_reserved<'a>(term: Term<'a>) -> NifResult<ReservedPatterns> {
     let list: ListIterator<'a> = term.decode().map_err(|_| Error::BadArg)?;
     let mut reserved = Vec::new();
     for item in list {
         let bin: Binary<'a> = item.decode().map_err(|_| Error::BadArg)?;
-        let bytes = bin.as_slice();
-        // Each reserved entry should be a single byte
-        if bytes.len() == 1 {
-            reserved.push(bytes[0]);
-        } else {
-            // Multi-byte reserved patterns: add all bytes individually
-            reserved.extend_from_slice(bytes);
+        if bin.as_slice().is_empty() {
+            return Err(Error::BadArg);
         }
+        reserved.push(bin.as_slice().to_vec());
     }
-    Ok(reserved)
+    Ok(ReservedPatterns::new(reserved))
 }
 
 /// Post-processing mode for encoding. Determines what extra work is needed
@@ -1253,7 +1275,7 @@ fn encode_string_none<'a>(
     separators: &Separators,
     escape: &Escape,
     line_separator: &[u8],
-    reserved: &[u8],
+    reserved: &ReservedPatterns,
 ) -> NifResult<Term<'a>> {
     use strategy::encode::{write_quoted_field, write_quoted_field_general};
 
@@ -1262,10 +1284,7 @@ fn encode_string_none<'a>(
 
     if is_all_single_byte(separators, escape) {
         let esc = escape.bytes[0];
-        let sep_bytes = single_byte_seps(separators);
-        let dump_sep = sep_bytes[0];
-        let multi_sep = sep_bytes.len() > 1;
-
+        let dump_sep = single_byte_seps(separators)[0];
         for row_term in rows_iter {
             let field_iter: ListIterator<'a> = row_term.decode().map_err(|_| Error::BadArg)?;
             let mut first = true;
@@ -1279,11 +1298,7 @@ fn encode_string_none<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = if multi_sep {
-                    field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
-                } else {
-                    field_needs_quoting_simd(field_bytes, dump_sep, esc, reserved)
-                };
+                let needs_quoting = field_needs_quoting(field_bytes, reserved);
                 if needs_quoting {
                     write_quoted_field(&mut buf, field_bytes, esc);
                 } else {
@@ -1311,7 +1326,7 @@ fn encode_string_none<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                if field_needs_quoting_general(field_bytes, sep_pattern, esc_pattern, reserved) {
+                if field_needs_quoting(field_bytes, reserved) {
                     write_quoted_field_general(&mut buf, field_bytes, esc_pattern);
                 } else {
                     buf.extend_from_slice(field_bytes);
@@ -1339,7 +1354,7 @@ fn encode_string_formula<'a>(
     escape: &Escape,
     line_separator: &[u8],
     formula: &FormulaConfig,
-    reserved: &[u8],
+    reserved: &ReservedPatterns,
 ) -> NifResult<Term<'a>> {
     use strategy::encode::{
         write_quoted_field, write_quoted_field_general, write_quoted_field_inner,
@@ -1351,10 +1366,7 @@ fn encode_string_formula<'a>(
 
     if is_all_single_byte(separators, escape) {
         let esc = escape.bytes[0];
-        let sep_bytes = single_byte_seps(separators);
-        let dump_sep = sep_bytes[0];
-        let multi_sep = sep_bytes.len() > 1;
-
+        let dump_sep = single_byte_seps(separators)[0];
         for row_term in rows_iter {
             let field_iter: ListIterator<'a> = row_term.decode().map_err(|_| Error::BadArg)?;
             let mut first = true;
@@ -1368,11 +1380,7 @@ fn encode_string_formula<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = if multi_sep {
-                    field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
-                } else {
-                    field_needs_quoting_simd(field_bytes, dump_sep, esc, reserved)
-                };
+                let needs_quoting = field_needs_quoting(field_bytes, reserved);
 
                 if let Some(prefix) = formula.check(field_bytes) {
                     if needs_quoting {
@@ -1411,8 +1419,7 @@ fn encode_string_formula<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting =
-                    field_needs_quoting_general(field_bytes, sep_pattern, esc_pattern, reserved);
+                let needs_quoting = field_needs_quoting(field_bytes, reserved);
 
                 if let Some(prefix) = formula.check(field_bytes) {
                     if needs_quoting {
@@ -1448,7 +1455,7 @@ fn encode_string_encoding<'a>(
     escape: &Escape,
     line_separator: &[u8],
     target: EncodingTarget,
-    reserved: &[u8],
+    reserved: &ReservedPatterns,
 ) -> NifResult<Term<'a>> {
     use strategy::encode::{write_quoted_field, write_quoted_field_general};
     use strategy::encoding::encode_utf8_extend;
@@ -1459,15 +1466,18 @@ fn encode_string_encoding<'a>(
 
     // Pre-encode separator and line_separator into buf-compatible bytes
     let mut sep_encoded: Vec<u8> = Vec::new();
-    encode_utf8_extend(&mut sep_encoded, &separators.patterns[0], target);
+    encode_or_return!(
+        env,
+        encode_utf8_extend(&mut sep_encoded, &separators.patterns[0], target)
+    );
     let mut ls_encoded: Vec<u8> = Vec::new();
-    encode_utf8_extend(&mut ls_encoded, line_separator, target);
+    encode_or_return!(
+        env,
+        encode_utf8_extend(&mut ls_encoded, line_separator, target)
+    );
 
     if is_all_single_byte(separators, escape) {
         let esc = escape.bytes[0];
-        let sep_bytes = single_byte_seps(separators);
-        let dump_sep = sep_bytes[0];
-        let multi_sep = sep_bytes.len() > 1;
 
         for row_term in rows_iter {
             let field_iter: ListIterator<'a> = row_term.decode().map_err(|_| Error::BadArg)?;
@@ -1482,11 +1492,7 @@ fn encode_string_encoding<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = if multi_sep {
-                    field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
-                } else {
-                    field_needs_quoting_simd(field_bytes, dump_sep, esc, reserved)
-                };
+                let needs_quoting = field_needs_quoting(field_bytes, reserved);
 
                 let utf8_src: &[u8] = if needs_quoting {
                     scratch.clear();
@@ -1495,14 +1501,13 @@ fn encode_string_encoding<'a>(
                 } else {
                     field_bytes
                 };
-                encode_utf8_extend(&mut buf, utf8_src, target);
+                encode_or_return!(env, encode_utf8_extend(&mut buf, utf8_src, target));
             }
             buf.extend_from_slice(&ls_encoded);
             row_terms.push(new_binary_term(env, &buf));
             buf.clear();
         }
     } else {
-        let sep_pattern = &separators.patterns[0];
         let esc_pattern = &escape.bytes;
 
         for row_term in rows_iter {
@@ -1519,16 +1524,14 @@ fn encode_string_encoding<'a>(
                 };
                 let field_bytes = field_bin.as_slice();
 
-                let utf8_src: &[u8] =
-                    if field_needs_quoting_general(field_bytes, sep_pattern, esc_pattern, reserved)
-                    {
-                        scratch.clear();
-                        write_quoted_field_general(&mut scratch, field_bytes, esc_pattern);
-                        &scratch
-                    } else {
-                        field_bytes
-                    };
-                encode_utf8_extend(&mut buf, utf8_src, target);
+                let utf8_src: &[u8] = if field_needs_quoting(field_bytes, reserved) {
+                    scratch.clear();
+                    write_quoted_field_general(&mut scratch, field_bytes, esc_pattern);
+                    &scratch
+                } else {
+                    field_bytes
+                };
+                encode_or_return!(env, encode_utf8_extend(&mut buf, utf8_src, target));
             }
             buf.extend_from_slice(&ls_encoded);
             row_terms.push(new_binary_term(env, &buf));
@@ -1550,7 +1553,7 @@ fn encode_string_full<'a>(
     line_separator: &[u8],
     formula: &FormulaConfig,
     target: EncodingTarget,
-    reserved: &[u8],
+    reserved: &ReservedPatterns,
 ) -> NifResult<Term<'a>> {
     use strategy::encode::{
         write_quoted_field, write_quoted_field_general, write_quoted_field_inner,
@@ -1563,15 +1566,18 @@ fn encode_string_full<'a>(
     let mut row_terms = Vec::new();
 
     let mut sep_encoded: Vec<u8> = Vec::new();
-    encode_utf8_extend(&mut sep_encoded, &separators.patterns[0], target);
+    encode_or_return!(
+        env,
+        encode_utf8_extend(&mut sep_encoded, &separators.patterns[0], target)
+    );
     let mut ls_encoded: Vec<u8> = Vec::new();
-    encode_utf8_extend(&mut ls_encoded, line_separator, target);
+    encode_or_return!(
+        env,
+        encode_utf8_extend(&mut ls_encoded, line_separator, target)
+    );
 
     if is_all_single_byte(separators, escape) {
         let esc = escape.bytes[0];
-        let sep_bytes = single_byte_seps(separators);
-        let dump_sep = sep_bytes[0];
-        let multi_sep = sep_bytes.len() > 1;
 
         for row_term in rows_iter {
             let field_iter: ListIterator<'a> = row_term.decode().map_err(|_| Error::BadArg)?;
@@ -1586,25 +1592,21 @@ fn encode_string_full<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = if multi_sep {
-                    field_needs_quoting_simd_multi_sep(field_bytes, &sep_bytes, esc, reserved)
-                } else {
-                    field_needs_quoting_simd(field_bytes, dump_sep, esc, reserved)
-                };
+                let needs_quoting = field_needs_quoting(field_bytes, reserved);
 
                 if let Some(prefix) = formula.check(field_bytes) {
                     if needs_quoting {
                         // Dirty + formula: encoded_esc ++ raw_prefix ++ encoded_inner ++ encoded_esc
-                        encode_utf8_extend(&mut buf, &[esc], target);
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, &[esc], target));
                         buf.extend_from_slice(prefix);
                         scratch.clear();
                         write_quoted_field_inner(&mut scratch, field_bytes, esc);
-                        encode_utf8_extend(&mut buf, &scratch, target);
-                        encode_utf8_extend(&mut buf, &[esc], target);
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, &scratch, target));
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, &[esc], target));
                     } else {
                         // Clean + formula: raw_prefix ++ encoded_field
                         buf.extend_from_slice(prefix);
-                        encode_utf8_extend(&mut buf, field_bytes, target);
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, field_bytes, target));
                     }
                 } else {
                     let utf8_src: &[u8] = if needs_quoting {
@@ -1614,7 +1616,7 @@ fn encode_string_full<'a>(
                     } else {
                         field_bytes
                     };
-                    encode_utf8_extend(&mut buf, utf8_src, target);
+                    encode_or_return!(env, encode_utf8_extend(&mut buf, utf8_src, target));
                 }
             }
             buf.extend_from_slice(&ls_encoded);
@@ -1622,7 +1624,6 @@ fn encode_string_full<'a>(
             buf.clear();
         }
     } else {
-        let sep_pattern = &separators.patterns[0];
         let esc_pattern = &escape.bytes;
 
         for row_term in rows_iter {
@@ -1638,20 +1639,19 @@ fn encode_string_full<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting =
-                    field_needs_quoting_general(field_bytes, sep_pattern, esc_pattern, reserved);
+                let needs_quoting = field_needs_quoting(field_bytes, reserved);
 
                 if let Some(prefix) = formula.check(field_bytes) {
                     if needs_quoting {
-                        encode_utf8_extend(&mut buf, esc_pattern, target);
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, esc_pattern, target));
                         buf.extend_from_slice(prefix);
                         scratch.clear();
                         write_quoted_field_inner_general(&mut scratch, field_bytes, esc_pattern);
-                        encode_utf8_extend(&mut buf, &scratch, target);
-                        encode_utf8_extend(&mut buf, esc_pattern, target);
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, &scratch, target));
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, esc_pattern, target));
                     } else {
                         buf.extend_from_slice(prefix);
-                        encode_utf8_extend(&mut buf, field_bytes, target);
+                        encode_or_return!(env, encode_utf8_extend(&mut buf, field_bytes, target));
                     }
                 } else {
                     let utf8_src: &[u8] = if needs_quoting {
@@ -1661,7 +1661,7 @@ fn encode_string_full<'a>(
                     } else {
                         field_bytes
                     };
-                    encode_utf8_extend(&mut buf, utf8_src, target);
+                    encode_or_return!(env, encode_utf8_extend(&mut buf, utf8_src, target));
                 }
             }
             buf.extend_from_slice(&ls_encoded);
@@ -1696,10 +1696,8 @@ fn encode_string_parallel<'a>(
     reserved_term: Term<'a>,
 ) -> NifResult<Term<'a>> {
     use rayon::prelude::*;
-    use strategy::encode::{
-        field_needs_quoting_simd, write_quoted_field, write_quoted_field_inner,
-    };
-    use strategy::encoding::encode_utf8_to_target;
+    use strategy::encode::{write_quoted_field, write_quoted_field_inner};
+    use strategy::encoding::{encode_utf8_to_target, EncodingError};
     use strategy::parallel::run_parallel;
 
     let separators = decode_separators(sep_term)?;
@@ -1720,7 +1718,7 @@ fn encode_string_parallel<'a>(
     let needs_encoding = encoding != EncodingTarget::Utf8;
 
     // Clone formula rules into an Arc for sharing across rayon threads
-    let formula_rules: Vec<(u8, Vec<u8>)> = formula.rules;
+    let formula_rules: Vec<(Vec<u8>, Vec<u8>)> = formula.rules;
 
     // Phase 1: Extract all field data into owned Rust structures (main thread)
     let rows_iter: ListIterator<'a> = rows_term.decode().map_err(|_| Error::BadArg)?;
@@ -1745,96 +1743,99 @@ fn encode_string_parallel<'a>(
 
     // Pre-encode separator and line_separator for non-UTF-8
     let sep_bytes_encoded: Vec<u8> = if needs_encoding {
-        encode_utf8_to_target(&[dump_sep], encoding)
+        encode_or_return!(env, encode_utf8_to_target(&[dump_sep], encoding))
     } else {
         vec![dump_sep]
     };
     let ls_encoded: Vec<u8> = if needs_encoding {
-        encode_utf8_to_target(&line_separator, encoding)
+        encode_or_return!(env, encode_utf8_to_target(&line_separator, encoding))
     } else {
         line_separator.clone()
     };
 
-    let encoded_rows: Vec<Vec<u8>> = run_parallel(|| {
-        all_rows
-            .par_iter()
-            .map(|row| {
-                let mut out = Vec::with_capacity(128);
-                for (i, field) in row.iter().enumerate() {
-                    if i > 0 {
-                        if needs_encoding {
-                            out.extend_from_slice(&sep_bytes_encoded);
-                        } else {
-                            out.push(dump_sep);
-                        }
-                    }
-
-                    // Check formula trigger
-                    let formula_prefix: Option<&[u8]> = if has_formula && !field.is_empty() {
-                        let first = field[0];
-                        formula_rules
-                            .iter()
-                            .find(|(trigger, _)| *trigger == first)
-                            .map(|(_, replacement)| replacement.as_slice())
-                    } else {
-                        None
-                    };
-
-                    let needs_quoting = field_needs_quoting_simd(field, dump_sep, esc, &reserved);
-
-                    if let Some(prefix) = formula_prefix {
-                        if needs_quoting {
+    let encoded_rows: Vec<Vec<u8>> = encode_or_return!(
+        env,
+        run_parallel(|| {
+            all_rows
+                .par_iter()
+                .map(|row| {
+                    let mut out = Vec::with_capacity(128);
+                    for (i, field) in row.iter().enumerate() {
+                        if i > 0 {
                             if needs_encoding {
-                                // [encoded_esc, raw_prefix, encoded_inner, encoded_esc]
-                                let encoded_esc = encode_utf8_to_target(&[esc], encoding);
-                                let mut inner_buf = Vec::with_capacity(field.len() + 8);
-                                write_quoted_field_inner(&mut inner_buf, field, esc);
-                                let encoded_inner = encode_utf8_to_target(&inner_buf, encoding);
-                                out.extend_from_slice(&encoded_esc);
-                                out.extend_from_slice(prefix);
-                                out.extend_from_slice(&encoded_inner);
-                                out.extend_from_slice(&encoded_esc);
+                                out.extend_from_slice(&sep_bytes_encoded);
                             } else {
-                                // FormulaOnly: prefix inside quotes
-                                out.push(esc);
+                                out.push(dump_sep);
+                            }
+                        }
+
+                        // Check formula trigger
+                        let formula_prefix: Option<&[u8]> = if has_formula {
+                            formula_rules
+                                .iter()
+                                .find(|(trigger, _)| field.starts_with(trigger))
+                                .map(|(_, replacement)| replacement.as_slice())
+                        } else {
+                            None
+                        };
+
+                        let needs_quoting = field_needs_quoting(field, &reserved);
+
+                        if let Some(prefix) = formula_prefix {
+                            if needs_quoting {
+                                if needs_encoding {
+                                    // [encoded_esc, raw_prefix, encoded_inner, encoded_esc]
+                                    let encoded_esc = encode_utf8_to_target(&[esc], encoding)?;
+                                    let mut inner_buf = Vec::with_capacity(field.len() + 8);
+                                    write_quoted_field_inner(&mut inner_buf, field, esc);
+                                    let encoded_inner =
+                                        encode_utf8_to_target(&inner_buf, encoding)?;
+                                    out.extend_from_slice(&encoded_esc);
+                                    out.extend_from_slice(prefix);
+                                    out.extend_from_slice(&encoded_inner);
+                                    out.extend_from_slice(&encoded_esc);
+                                } else {
+                                    // FormulaOnly: prefix inside quotes
+                                    out.push(esc);
+                                    out.extend_from_slice(prefix);
+                                    write_quoted_field_inner(&mut out, field, esc);
+                                    out.push(esc);
+                                }
+                            } else if needs_encoding {
+                                // Clean + formula + encoding: prefix raw, field encoded
                                 out.extend_from_slice(prefix);
-                                write_quoted_field_inner(&mut out, field, esc);
-                                out.push(esc);
+                                let encoded = encode_utf8_to_target(field, encoding)?;
+                                out.extend_from_slice(&encoded);
+                            } else {
+                                // Clean + formula, no encoding
+                                out.extend_from_slice(prefix);
+                                out.extend_from_slice(field);
+                            }
+                            continue;
+                        }
+
+                        if needs_quoting {
+                            let mut buf = Vec::with_capacity(field.len() + 8);
+                            write_quoted_field(&mut buf, field, esc);
+                            if needs_encoding {
+                                let encoded = encode_utf8_to_target(&buf, encoding)?;
+                                out.extend_from_slice(&encoded);
+                            } else {
+                                out.extend_from_slice(&buf);
                             }
                         } else if needs_encoding {
-                            // Clean + formula + encoding: prefix raw, field encoded
-                            out.extend_from_slice(prefix);
-                            let encoded = encode_utf8_to_target(field, encoding);
+                            let encoded = encode_utf8_to_target(field, encoding)?;
                             out.extend_from_slice(&encoded);
                         } else {
-                            // Clean + formula, no encoding
-                            out.extend_from_slice(prefix);
                             out.extend_from_slice(field);
                         }
-                        continue;
                     }
-
-                    if needs_quoting {
-                        let mut buf = Vec::with_capacity(field.len() + 8);
-                        write_quoted_field(&mut buf, field, esc);
-                        if needs_encoding {
-                            let encoded = encode_utf8_to_target(&buf, encoding);
-                            out.extend_from_slice(&encoded);
-                        } else {
-                            out.extend_from_slice(&buf);
-                        }
-                    } else if needs_encoding {
-                        let encoded = encode_utf8_to_target(field, encoding);
-                        out.extend_from_slice(&encoded);
-                    } else {
-                        out.extend_from_slice(field);
-                    }
-                }
-                out.extend_from_slice(&ls_encoded);
-                out
-            })
-            .collect()
-    });
+                    out.extend_from_slice(&ls_encoded);
+                    Ok(out)
+                })
+                .collect::<Result<Vec<Vec<u8>>, EncodingError>>()
+        })
+    );
 
     let row_terms: Vec<Term<'a>> = encoded_rows
         .into_iter()

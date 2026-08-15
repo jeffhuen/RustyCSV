@@ -24,14 +24,11 @@ jobs:
       matrix:
         include:
           - pair:
-              elixir: 1.16
-              otp: 25
-          - pair:
-              elixir: 1.17
-              otp: 26
-          - pair:
               elixir: 1.18
               otp: 27
+          - pair:
+              elixir: 1.19
+              otp: 28
           - pair:
               elixir: "1.20"
               otp: 29
@@ -46,6 +43,7 @@ jobs:
     - name: Install Rust nightly
       uses: dtolnay/rust-toolchain@nightly
       with:
+        toolchain: nightly-2026-07-27
         components: rustfmt, clippy
     - name: Restore Elixir dependencies cache
       uses: actions/cache@v4
@@ -64,10 +62,26 @@ jobs:
     - name: Install dependencies
       run: mix deps.get
     - name: Check formatting
-      run: mix format --check-formatted && cargo fmt --check --manifest-path native/rustycsv/Cargo.toml
+      run: mix format --check-formatted && cargo fmt --all --check --manifest-path native/rustycsv/Cargo.toml
     - name: Clippy
-      run: cargo clippy --manifest-path native/rustycsv/Cargo.toml -- -D warnings
+      run: |
+        cargo clippy --manifest-path native/rustycsv/Cargo.toml --workspace --all-targets --locked -- -D warnings
+        cargo clippy --manifest-path native/rustycsv/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
     - name: Rust tests
-      run: cargo test --manifest-path native/rustycsv/Cargo.toml
+      run: |
+        cargo test --manifest-path native/rustycsv/Cargo.toml --workspace --locked
+        cargo test --manifest-path native/rustycsv/Cargo.toml --workspace --all-features --locked
+    - name: Miri pure Rust parser tests
+      if: matrix.pair.elixir == '1.20'
+      run: |
+        rustup component add --toolchain nightly-2026-07-27 miri rust-src
+        cargo +nightly-2026-07-27 miri test --manifest-path native/rustycsv/Cargo.toml --no-default-features core::
+        cargo +nightly-2026-07-27 miri test --manifest-path native/rustycsv/Cargo.toml --no-default-features strategy::encode::tests
     - name: Run tests
       run: mix test
+    - name: Verify packaged source build
+      if: matrix.pair.elixir == '1.20'
+      run: |
+        package_dir="$(mktemp -d)"
+        mix hex.build --unpack --output "$package_dir"
+        cargo build --release --locked --manifest-path "$package_dir/native/rustycsv/Cargo.toml"

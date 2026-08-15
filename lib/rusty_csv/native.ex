@@ -87,10 +87,15 @@ defmodule RustyCSV.Native do
           end
 
         match?({:win32, _}, :os.type()) ->
-          # On Windows, assume AVX2 for x86_64 — practically all x86_64 Windows
-          # machines in 2024+ have Haswell or newer. Worst case: falls back to
-          # baseline binary if the variant download fails.
-          true
+          script =
+            ~S/Add-Type -Namespace RustyCSV -Name CpuFeatures -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);'; [RustyCSV.CpuFeatures]::IsProcessorFeaturePresent(40)/
+
+          case System.cmd("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
+                 stderr_to_stdout: true
+               ) do
+            {result, 0} -> String.trim(result) == "True"
+            _ -> false
+          end
 
         true ->
           # macOS x86_64: check via sysctl

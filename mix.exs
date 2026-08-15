@@ -1,15 +1,14 @@
 defmodule RustyCSV.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.4.1"
   @source_url "https://github.com/jeffhuen/rustycsv"
 
   def project do
     [
       app: :rusty_csv,
       version: @version,
-      elixir: "~> 1.14",
-      start_permanent: Mix.env() == :prod,
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
 
@@ -42,6 +41,7 @@ defmodule RustyCSV.MixProject do
       files: ~w(
         lib
         native/rustycsv/src
+        native/rustycsv/benches
         native/rustycsv/Cargo.toml
         native/rustycsv/Cargo.lock
         native/rustycsv/rust-toolchain.toml
@@ -98,7 +98,7 @@ defmodule RustyCSV.MixProject do
       {:stream_data, "~> 1.3", only: [:dev, :test]},
       {:benchee, "~> 1.0", only: :dev},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:ex_slop, "~> 0.4.2", only: [:dev, :test], runtime: false},
+      {:ex_slop, "~> 0.4.2", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
