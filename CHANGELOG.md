@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-08-14
+
+This release republishes the verified 0.4.1 package under a fresh Hex version
+after Hex's CDN continued serving the reverted 0.4.1 archive. Code, dependencies,
+and behavior are unchanged from 0.4.1.
+
 ## [0.4.1] - 2026-08-14
 
 This release primarily improves correctness, native-code safety, and source-build
