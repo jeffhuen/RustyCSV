@@ -22,4 +22,12 @@ defmodule RustyCSV.DumpingSafetyTest do
     assert CSV.dump_to_iodata(rows, strategy: :parallel) |> IO.iodata_to_binary() ==
              "name,age\r\njohn,27\r\njane,30.5\r\n"
   end
+
+  test "dumping rejects unknown options" do
+    assert_raise ArgumentError, fn -> CSV.dump_to_iodata([], escape_formula: %{"=" => "'"}) end
+  end
+
+  test "dumping rejects unsupported strategy values" do
+    assert_raise ArgumentError, fn -> CSV.dump_to_iodata([], strategy: :unknown) end
+  end
 end

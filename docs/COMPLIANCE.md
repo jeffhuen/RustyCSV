@@ -1,6 +1,6 @@
 # RustyCSV Compliance & Validation
 
-RustyCSV takes correctness seriously. With **494 ExUnit tests** plus **125 Rust
+RustyCSV takes correctness seriously. With **416 ExUnit tests** plus **127 Rust
 tests**, including industry-standard validation suites used by CSV parsers
 across multiple languages, RustyCSV is one of the most thoroughly tested CSV
 libraries available for Elixir.
@@ -181,8 +181,8 @@ Compatibility is verified through:
 
 1. **API compatibility tests** - NimbleCSV's public parser/dumper functions and
    original `options/0` values.
-2. **Output matching** - Encoded bytes, top-level row count, row order, BOM, and
-   list-shaped row iodata.
+2. **Output matching** - Formula-disabled encoded bytes, top-level row count,
+   row order, BOM, and list-shaped row iodata.
 3. **Round-trip tests** - Parse → dump → parse produces identical data.
 4. **Full-file validation** - 100K-row CSV parsed through both libraries
    produces identical row-by-row output.
@@ -216,12 +216,15 @@ Two runs are recorded:
 
 | Upstream source | Literal | Semantic |
 |-----------------|---------|----------|
-| v1.3.0 tag | 17/21 | 21/21 |
-| master at `8cc4e68151975e5ff6eb1ad4a738a728bcb17a1e` | 19/23 | 23/23 |
+| v1.3.0 tag | 16/21 | 20/21 |
+| master at `8cc4e68151975e5ff6eb1ad4a738a728bcb17a1e` | 17/23 | 21/23 |
 
-The four literal failures are message-string differences only. The temporary
-semantic transformation exists only in the test process; no compatibility
-shim or raw-input formatter is written to the repository or shipped.
+Four literal failures are message-string differences. The remaining one v1.3.0
+test and two master tests assert NimbleCSV's exact unquoted formula-neutralized
+bytes; RustyCSV deliberately quotes those fields as described below. The
+temporary semantic transformation exists only in the test process; no
+compatibility shim or raw-input formatter is written to the repository or
+shipped.
 
 ### Parse Error Data Policy
 
@@ -238,6 +241,15 @@ unfinished parity item.
 Temporarily changing production errors to include raw CSV would test behavior
 that will not ship and risks committing a data leak. Future parity checks should
 repeat the in-memory semantic run instead.
+
+### Formula Neutralization
+
+`escape_formula` is disabled by default. When enabled, RustyCSV deliberately
+differs from NimbleCSV's encoded bytes: every matched field is quoted, and the
+configured replacement plus original value are escaped and converted to the
+target encoding as one logical field. Parsing the output returns the same
+`replacement <> original` value, but its CSV representation is intentionally
+safer for custom replacements and non-UTF-8 output.
 
 ### Iodata Shape
 
@@ -301,11 +313,11 @@ test/fixtures/
 
 | Gate | Result |
 |------|--------|
-| Rust unit tests | 114 passed |
+| Rust unit tests | 116 passed |
 | Rust conformance tests | 11 passed |
-| ExUnit | 494 passed, including 5 properties |
-| NimbleCSV v1.3.0 semantic suite | 21/21 passed |
-| NimbleCSV master semantic suite | 23/23 passed |
+| ExUnit | 416 passed, including 5 properties |
+| NimbleCSV v1.3.0 semantic suite | 20/21; formula bytes intentionally differ |
+| NimbleCSV master semantic suite | 21/23; formula bytes intentionally differ |
 | `cargo clippy -D warnings` | Passed |
 | `mix credo --strict` | Passed |
 | `mix dialyzer` | Passed |

@@ -1108,7 +1108,7 @@ fn decode_formula_config<'a>(term: Term<'a>) -> NifResult<FormulaConfig> {
         }
         let trigger: Binary<'a> = tuple[0].decode().map_err(|_| Error::BadArg)?;
         let replacement: Binary<'a> = tuple[1].decode().map_err(|_| Error::BadArg)?;
-        if trigger.as_slice().is_empty() {
+        if trigger.as_slice().is_empty() || replacement.as_slice().is_empty() {
             return Err(Error::BadArg);
         }
         rules.push((trigger.as_slice().to_vec(), replacement.as_slice().to_vec()));
@@ -1202,7 +1202,7 @@ fn new_binary_term<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
 ///
 /// Formula escaping and non-UTF-8 encoding are handled via the PostProcess enum:
 /// - None: UTF-8, no formula (fast path)
-/// - FormulaOnly: prefix triggered fields with replacement bytes
+/// - FormulaOnly: quote triggered fields after prefixing them with replacement bytes
 /// - EncodingOnly: convert all output to target encoding
 /// - Full: both formula escaping and encoding conversion
 #[allow(clippy::too_many_arguments)]
@@ -1344,9 +1344,8 @@ fn encode_string_none<'a>(
 /// PostProcess::FormulaOnly — UTF-8 + formula escaping.
 /// Reusable Vec<u8> row buffer → one NewBinary per row.
 ///
-/// NimbleCSV semantics:
-/// - Formula triggered + clean field → prefix ++ field (no quotes)
-/// - Formula triggered + dirty field → esc ++ prefix ++ escaped_inner ++ esc
+/// Formula-triggered fields are always quoted after the configured replacement
+/// and original value are escaped as one logical field.
 fn encode_string_formula<'a>(
     env: Env<'a>,
     rows_iter: ListIterator<'a>,
@@ -1357,11 +1356,12 @@ fn encode_string_formula<'a>(
     reserved: &ReservedPatterns,
 ) -> NifResult<Term<'a>> {
     use strategy::encode::{
-        write_quoted_field, write_quoted_field_general, write_quoted_field_inner,
-        write_quoted_field_inner_general,
+        write_formula_field, write_formula_field_general, write_quoted_field,
+        write_quoted_field_general,
     };
 
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    let mut logical_field: Vec<u8> = Vec::new();
     let mut row_terms = Vec::new();
 
     if is_all_single_byte(separators, escape) {
@@ -1380,19 +1380,9 @@ fn encode_string_formula<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = field_needs_quoting(field_bytes, reserved);
-
-                if let Some(prefix) = formula.check(field_bytes) {
-                    if needs_quoting {
-                        buf.push(esc);
-                        buf.extend_from_slice(prefix);
-                        write_quoted_field_inner(&mut buf, field_bytes, esc);
-                        buf.push(esc);
-                    } else {
-                        buf.extend_from_slice(prefix);
-                        buf.extend_from_slice(field_bytes);
-                    }
-                } else if needs_quoting {
+                if let Some(replacement) = formula.check(field_bytes) {
+                    write_formula_field(&mut buf, replacement, field_bytes, esc);
+                } else if field_needs_quoting(field_bytes, reserved) {
                     write_quoted_field(&mut buf, field_bytes, esc);
                 } else {
                     buf.extend_from_slice(field_bytes);
@@ -1419,19 +1409,15 @@ fn encode_string_formula<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = field_needs_quoting(field_bytes, reserved);
-
-                if let Some(prefix) = formula.check(field_bytes) {
-                    if needs_quoting {
-                        buf.extend_from_slice(esc_pattern);
-                        buf.extend_from_slice(prefix);
-                        write_quoted_field_inner_general(&mut buf, field_bytes, esc_pattern);
-                        buf.extend_from_slice(esc_pattern);
-                    } else {
-                        buf.extend_from_slice(prefix);
-                        buf.extend_from_slice(field_bytes);
-                    }
-                } else if needs_quoting {
+                if let Some(replacement) = formula.check(field_bytes) {
+                    write_formula_field_general(
+                        &mut buf,
+                        &mut logical_field,
+                        replacement,
+                        field_bytes,
+                        esc_pattern,
+                    );
+                } else if field_needs_quoting(field_bytes, reserved) {
                     write_quoted_field_general(&mut buf, field_bytes, esc_pattern);
                 } else {
                     buf.extend_from_slice(field_bytes);
@@ -1556,13 +1542,14 @@ fn encode_string_full<'a>(
     reserved: &ReservedPatterns,
 ) -> NifResult<Term<'a>> {
     use strategy::encode::{
-        write_quoted_field, write_quoted_field_general, write_quoted_field_inner,
-        write_quoted_field_inner_general,
+        write_formula_field, write_formula_field_general, write_quoted_field,
+        write_quoted_field_general,
     };
     use strategy::encoding::encode_utf8_extend;
 
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    let mut logical_field: Vec<u8> = Vec::new();
     let mut row_terms = Vec::new();
 
     let mut sep_encoded: Vec<u8> = Vec::new();
@@ -1592,24 +1579,12 @@ fn encode_string_full<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = field_needs_quoting(field_bytes, reserved);
-
-                if let Some(prefix) = formula.check(field_bytes) {
-                    if needs_quoting {
-                        // Dirty + formula: encoded_esc ++ raw_prefix ++ encoded_inner ++ encoded_esc
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, &[esc], target));
-                        buf.extend_from_slice(prefix);
-                        scratch.clear();
-                        write_quoted_field_inner(&mut scratch, field_bytes, esc);
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, &scratch, target));
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, &[esc], target));
-                    } else {
-                        // Clean + formula: raw_prefix ++ encoded_field
-                        buf.extend_from_slice(prefix);
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, field_bytes, target));
-                    }
+                if let Some(replacement) = formula.check(field_bytes) {
+                    scratch.clear();
+                    write_formula_field(&mut scratch, replacement, field_bytes, esc);
+                    encode_or_return!(env, encode_utf8_extend(&mut buf, &scratch, target));
                 } else {
-                    let utf8_src: &[u8] = if needs_quoting {
+                    let utf8_src: &[u8] = if field_needs_quoting(field_bytes, reserved) {
                         scratch.clear();
                         write_quoted_field(&mut scratch, field_bytes, esc);
                         &scratch
@@ -1639,22 +1614,18 @@ fn encode_string_full<'a>(
                     Err(term) => return Ok(term),
                 };
                 let field_bytes = field_bin.as_slice();
-                let needs_quoting = field_needs_quoting(field_bytes, reserved);
-
-                if let Some(prefix) = formula.check(field_bytes) {
-                    if needs_quoting {
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, esc_pattern, target));
-                        buf.extend_from_slice(prefix);
-                        scratch.clear();
-                        write_quoted_field_inner_general(&mut scratch, field_bytes, esc_pattern);
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, &scratch, target));
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, esc_pattern, target));
-                    } else {
-                        buf.extend_from_slice(prefix);
-                        encode_or_return!(env, encode_utf8_extend(&mut buf, field_bytes, target));
-                    }
+                if let Some(replacement) = formula.check(field_bytes) {
+                    scratch.clear();
+                    write_formula_field_general(
+                        &mut scratch,
+                        &mut logical_field,
+                        replacement,
+                        field_bytes,
+                        esc_pattern,
+                    );
+                    encode_or_return!(env, encode_utf8_extend(&mut buf, &scratch, target));
                 } else {
-                    let utf8_src: &[u8] = if needs_quoting {
+                    let utf8_src: &[u8] = if field_needs_quoting(field_bytes, reserved) {
                         scratch.clear();
                         write_quoted_field_general(&mut scratch, field_bytes, esc_pattern);
                         &scratch
@@ -1696,7 +1667,7 @@ fn encode_string_parallel<'a>(
     reserved_term: Term<'a>,
 ) -> NifResult<Term<'a>> {
     use rayon::prelude::*;
-    use strategy::encode::{write_quoted_field, write_quoted_field_inner};
+    use strategy::encode::{write_formula_field, write_quoted_field};
     use strategy::encoding::{encode_utf8_to_target, EncodingError};
     use strategy::parallel::run_parallel;
 
@@ -1760,6 +1731,7 @@ fn encode_string_parallel<'a>(
                 .par_iter()
                 .map(|row| {
                     let mut out = Vec::with_capacity(128);
+                    let mut formula_field = Vec::new();
                     for (i, field) in row.iter().enumerate() {
                         if i > 0 {
                             if needs_encoding {
@@ -1770,7 +1742,7 @@ fn encode_string_parallel<'a>(
                         }
 
                         // Check formula trigger
-                        let formula_prefix: Option<&[u8]> = if has_formula {
+                        let formula_replacement: Option<&[u8]> = if has_formula {
                             formula_rules
                                 .iter()
                                 .find(|(trigger, _)| field.starts_with(trigger))
@@ -1779,41 +1751,19 @@ fn encode_string_parallel<'a>(
                             None
                         };
 
-                        let needs_quoting = field_needs_quoting(field, &reserved);
-
-                        if let Some(prefix) = formula_prefix {
-                            if needs_quoting {
-                                if needs_encoding {
-                                    // [encoded_esc, raw_prefix, encoded_inner, encoded_esc]
-                                    let encoded_esc = encode_utf8_to_target(&[esc], encoding)?;
-                                    let mut inner_buf = Vec::with_capacity(field.len() + 8);
-                                    write_quoted_field_inner(&mut inner_buf, field, esc);
-                                    let encoded_inner =
-                                        encode_utf8_to_target(&inner_buf, encoding)?;
-                                    out.extend_from_slice(&encoded_esc);
-                                    out.extend_from_slice(prefix);
-                                    out.extend_from_slice(&encoded_inner);
-                                    out.extend_from_slice(&encoded_esc);
-                                } else {
-                                    // FormulaOnly: prefix inside quotes
-                                    out.push(esc);
-                                    out.extend_from_slice(prefix);
-                                    write_quoted_field_inner(&mut out, field, esc);
-                                    out.push(esc);
-                                }
-                            } else if needs_encoding {
-                                // Clean + formula + encoding: prefix raw, field encoded
-                                out.extend_from_slice(prefix);
-                                let encoded = encode_utf8_to_target(field, encoding)?;
+                        if let Some(replacement) = formula_replacement {
+                            if needs_encoding {
+                                formula_field.clear();
+                                write_formula_field(&mut formula_field, replacement, field, esc);
+                                let encoded = encode_utf8_to_target(&formula_field, encoding)?;
                                 out.extend_from_slice(&encoded);
                             } else {
-                                // Clean + formula, no encoding
-                                out.extend_from_slice(prefix);
-                                out.extend_from_slice(field);
+                                write_formula_field(&mut out, replacement, field, esc);
                             }
                             continue;
                         }
 
+                        let needs_quoting = field_needs_quoting(field, &reserved);
                         if needs_quoting {
                             let mut buf = Vec::with_capacity(field.len() + 8);
                             write_quoted_field(&mut buf, field, esc);

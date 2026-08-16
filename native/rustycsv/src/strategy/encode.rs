@@ -86,6 +86,30 @@ pub fn write_quoted_field_inner_general(out: &mut Vec<u8>, field: &[u8], escape:
     }
 }
 
+/// Write a formula-neutralized field as one quoted logical value.
+#[inline]
+pub(crate) fn write_formula_field(out: &mut Vec<u8>, replacement: &[u8], field: &[u8], escape: u8) {
+    out.push(escape);
+    write_quoted_field_inner(out, replacement, escape);
+    write_quoted_field_inner(out, field, escape);
+    out.push(escape);
+}
+
+/// Write a formula-neutralized field with a multi-byte escape sequence.
+#[inline]
+pub(crate) fn write_formula_field_general(
+    out: &mut Vec<u8>,
+    logical_field: &mut Vec<u8>,
+    replacement: &[u8],
+    field: &[u8],
+    escape: &[u8],
+) {
+    logical_field.clear();
+    logical_field.extend_from_slice(replacement);
+    logical_field.extend_from_slice(field);
+    write_quoted_field_general(out, logical_field, escape);
+}
+
 // ==========================================================================
 // Scanning: reserved-pattern matching
 // ==========================================================================
@@ -175,6 +199,23 @@ mod tests {
         let mut out = Vec::new();
         write_quoted_field_general(&mut out, b"a$$b", b"$$");
         assert_eq!(out, b"$$a$$$$b$$");
+    }
+
+    #[test]
+    fn formula_field_quotes_and_escapes_replacement_and_value() {
+        let mut out = Vec::new();
+        write_formula_field(&mut out, b"\"", b"=\"value\"", b'\"');
+
+        assert_eq!(out, b"\"\"\"=\"\"value\"\"\"");
+    }
+
+    #[test]
+    fn formula_field_general_escapes_the_combined_logical_value() {
+        let mut out = Vec::new();
+        let mut logical_field = Vec::new();
+        write_formula_field_general(&mut out, &mut logical_field, b"$", b"=value$=", b"$=");
+
+        assert_eq!(out, b"$=$=$=value$=$=$=");
     }
 
     #[test]

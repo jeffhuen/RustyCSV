@@ -3,7 +3,7 @@
 **Ultra-fast CSV parsing and encoding for Elixir.** A purpose-built Rust NIF with SIMD acceleration, parallel parsing, and bounded-memory streaming. Drop-in replacement for NimbleCSV.
 
 [![Hex.pm](https://img.shields.io/hexpm/v/rusty_csv.svg)](https://hex.pm/packages/rusty_csv)
-[![Tests](https://img.shields.io/badge/tests-494%20ExUnit%20%2B%20125%20Rust-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-416%20ExUnit%20%2B%20127%20Rust-brightgreen.svg)]()
 [![RFC 4180](https://img.shields.io/badge/RFC%204180-compliant-blue.svg)]()
 
 ## Why RustyCSV?
@@ -41,7 +41,7 @@
 | **High-performance allocator** | ✅ mimalloc | System |
 | **Drop-in replacement** | ✅ Same API | - |
 | **Headers-to-maps** | ✅ `headers: true` or explicit keys | ❌ |
-| **RFC 4180 compliant** | ✅ 494 ExUnit + 125 Rust tests | ✅ |
+| **RFC 4180 compliant** | ✅ 416 ExUnit + 127 Rust tests | ✅ |
 | **[Benchmark (7MB CSV)](https://rusty-csv.hexdocs.pm/benchmark.html#large-csv-6-82-mb-100k-rows)** | ~20ms | ~233ms |
 
 ## Purpose-Built for Elixir
@@ -93,7 +93,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.4.2"}]
+  [{:rusty_csv, "~> 0.4.3"}]
 end
 ```
 
@@ -220,8 +220,13 @@ MyApp.TSV.parse_string("a\tb\tc\n1\t2\t3\n")
 | `:encoding` | Character encoding (see below) | `:utf8` |
 | `:trim_bom` | Remove BOM when parsing | `false` |
 | `:dump_bom` | Add BOM when dumping | `false` |
-| `:escape_formula` | Escape formula injection | `nil` |
+| `:escape_formula` | Opt-in formula neutralization; matched fields are prefixed and quoted | `nil` |
 | `:strategy` | Default parsing strategy | `:simd` |
+
+With `:escape_formula` enabled, RustyCSV intentionally quotes every matched
+field and encodes the complete prefixed value in one pass. Formula-disabled
+dumping remains byte-compatible with NimbleCSV; see
+[Compliance and Validation](https://rusty-csv.hexdocs.pm/compliance.html#formula-neutralization).
 
 ### Multi-Separator Support
 
@@ -325,23 +330,23 @@ Spreadsheet.parse_string(utf16_data)
 
 RustyCSV is **fully RFC 4180 compliant** and validated against industry-standard test suites:
 
-| Test Suite | Tests | Status |
-|------------|-------|--------|
-| [csv-spectrum](https://github.com/max-mapper/csv-spectrum) | 17 | ✅ All pass |
-| [csv-test-data](https://github.com/sineemore/csv-test-data) | 23 | ✅ All pass |
-| Edge cases (PapaParse-inspired) | 53 | ✅ All pass |
-| Core + NimbleCSV compat | 36 | ✅ All pass |
-| Encoding (UTF-16, Latin-1, etc.) | 20 | ✅ All pass |
-| Multi-separator support | 19 | ✅ All pass |
-| Multi-byte separator | 13 | ✅ All pass |
-| Multi-byte escape | 12 | ✅ All pass |
-| Native API separator/escape | 40 | ✅ All pass |
-| Headers-to-maps | 97 | ✅ All pass |
-| Custom newlines | 18 | ✅ All pass |
-| Streaming safety | 12 | ✅ All pass |
-| Concurrent access | 7 | ✅ All pass |
-| 0.4.1 parity regressions | 10 | ✅ All pass |
-| **ExUnit suite total** | **494** | ✅ |
+| Test Suite | Status |
+|------------|--------|
+| [csv-spectrum](https://github.com/max-mapper/csv-spectrum) | ✅ All pass |
+| [csv-test-data](https://github.com/sineemore/csv-test-data) | ✅ All pass |
+| Edge cases (PapaParse-inspired) | ✅ All pass |
+| Core + NimbleCSV compat | ✅ All pass |
+| Encoding (UTF-16, Latin-1, etc.) | ✅ All pass |
+| Multi-separator support | ✅ All pass |
+| Multi-byte separator | ✅ All pass |
+| Multi-byte escape | ✅ All pass |
+| Native API separator/escape | ✅ All pass |
+| Headers-to-maps | ✅ All pass |
+| Custom newlines | ✅ All pass |
+| Streaming safety | ✅ All pass |
+| Concurrent access | ✅ All pass |
+| 0.4.1 parity regressions | ✅ All pass |
+| **ExUnit suite total** | **416, including 5 properties** |
 
 See [Compliance and Validation](https://rusty-csv.hexdocs.pm/compliance.html) for full details.
 
@@ -583,7 +588,7 @@ mix deps.get
 # Compile (includes Rust NIF)
 mix compile
 
-# Run tests (494 ExUnit tests)
+# Run tests (416 ExUnit tests)
 mix test
 
 # Run benchmarks

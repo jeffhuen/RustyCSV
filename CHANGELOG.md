@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-08-15
+
+### Fixed
+
+- Formula-neutralized fields are now always quoted, with the configured
+  replacement and original value escaped together before the complete field is
+  converted to its target encoding. This prevents malformed CSV from custom
+  replacements and malformed UTF-16/UTF-32 output from mixed encodings. When
+  `escape_formula` is enabled, this intentionally differs from NimbleCSV's byte
+  output while preserving the parsed `replacement <> original` value.
+- Dumping now rejects unknown options and invalid `:strategy` values instead of
+  silently using the serial encoder.
+
 ## [0.4.2] - 2026-08-14
 
 This release republishes the verified 0.4.1 package under a fresh Hex version

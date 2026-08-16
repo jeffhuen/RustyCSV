@@ -30,7 +30,7 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 ### Validated Correctness
 
-- **494 ExUnit tests plus 5 properties and 125 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
+- **416 ExUnit tests including 5 properties, plus 127 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
 - **Cross-strategy validation** - All strategies produce identical output
 - **NimbleCSV compatibility** - The upstream semantic test suites pass against RustyCSV
 
@@ -356,8 +356,8 @@ Input: Erlang list of lists (rows of binary fields)
   ├─ For each field:
   │    ├─ SIMD scan: needs quoting? (16-32 bytes/cycle)
   │    ├─ Check formula trigger (if escape_formula configured)
-  │    ├─ Write to Vec<u8>: raw bytes / quoted bytes / formula-prefixed
-  │    └─ If non-UTF-8: encode field bytes to target encoding
+  │    ├─ Write to Vec<u8>: raw bytes / quoted bytes / quoted formula-neutralized field
+  │    └─ If non-UTF-8: encode the complete field to the target encoding
   │
   └─ memcpy row Vec<u8> → NewBinary (one BEAM binary per row)
 ```
@@ -367,9 +367,9 @@ Input: Erlang list of lists (rows of binary fields)
 | Mode | Formula | Encoding | Behavior |
 |------|---------|----------|----------|
 | `None` | No | UTF-8 | Write field bytes / quoted bytes directly |
-| `FormulaOnly` | Yes | UTF-8 | Prefix triggered fields, quote if dirty |
+| `FormulaOnly` | Yes | UTF-8 | Prefix and always quote triggered fields |
 | `EncodingOnly` | No | Non-UTF-8 | Encode each field + separators to target |
-| `Full` | Yes | Non-UTF-8 | Formula prefix (raw) + encoded content |
+| `Full` | Yes | Non-UTF-8 | Quote prefix + content, then encode once |
 
 See [BENCHMARK.md](BENCHMARK.md#encoding-benchmark-results) for throughput and memory numbers.
 

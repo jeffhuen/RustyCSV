@@ -14,7 +14,6 @@ defmodule RustyCSV.ParityRegressionTest do
   NimbleCSV.define(NimbleParityPipeNewline, newlines: ["|"], line_separator: "|")
 
   RustyCSV.define(MultiByteFormula, escape_formula: %{["–"] => "'"})
-  NimbleCSV.define(NimbleMultiByteFormula, escape_formula: %{["–"] => "'"})
 
   RustyCSV.define(Utf16, encoding: {:utf16, :little}, line_separator: "\n")
   RustyCSV.define(Latin1, encoding: :latin1)
@@ -51,10 +50,14 @@ defmodule RustyCSV.ParityRegressionTest do
     assert_dump_matches(MixedSeparator, NimbleMixedSeparator, [["a::b", "x"]])
   end
 
-  test "formula escaping matches the entire configured prefix" do
+  test "formula escaping matches the entire configured trigger" do
     rows = [["–formula", "—not-a-trigger", "…not-a-trigger"]]
-    assert_dump_matches(MultiByteFormula, NimbleMultiByteFormula, rows)
-    assert_dump_matches(MultiByteFormula, NimbleMultiByteFormula, rows, strategy: :parallel)
+    expected = [["'–formula", "—not-a-trigger", "…not-a-trigger"]]
+
+    for opts <- [[], [strategy: :parallel]] do
+      output = MultiByteFormula.dump_to_iodata(rows, opts) |> IO.iodata_to_binary()
+      assert MultiByteFormula.parse_string(output, skip_headers: false) == expected
+    end
   end
 
   test "non-UTF-8 encoders reject invalid or unmappable input" do

@@ -395,7 +395,7 @@ defmodule RustyCSV do
       multi-threaded encoding via rayon, which is faster for quoting-heavy data.
 
   """
-  @type dump_options :: [strategy: :parallel]
+  @type dump_options :: [strategy: :parallel | nil]
 
   @typedoc """
   Encoding for CSV data.
@@ -431,8 +431,12 @@ defmodule RustyCSV do
     * `:dump_bom` - Include BOM in output. Defaults to `false`.
     * `:reserved` - Additional characters requiring escaping.
     * `:escape_formula` - Map for formula injection prevention. Defaults to `nil`.
-      When set, fields starting with trigger characters are prefixed with a
-      replacement string inside quotes. Handled natively in the Rust NIF.
+      When set, fields starting with trigger characters are prefixed with the
+      configured replacement and always quoted. The replacement and original
+      value are escaped and encoded together as one field. This changes field
+      values and is not automatically reversed while parsing. It is an opt-in
+      mitigation, not a guarantee about every spreadsheet application's import
+      and save behavior. Triggers and replacements must normalize to non-empty binaries.
 
   ## Other Options
 
@@ -612,8 +616,12 @@ defmodule RustyCSV do
 
     * `:escape_formula` - A map of characters to their escaped versions
       for preventing CSV formula injection. When set, fields starting with
-      these characters are prefixed with the configured replacement. Defaults
-      to `nil`.
+      these characters are prefixed with the configured replacement and always
+      quoted. The replacement and original value are escaped and encoded
+      together. This changes field values and is not automatically reversed
+      while parsing. It is an opt-in mitigation, not a guarantee about every
+      spreadsheet application's import and save behavior. Triggers and
+      replacements must normalize to non-empty binaries. Defaults to `nil`.
 
       Example: `%{["=", "+", "-", "@"] => "'"}`
 
@@ -832,6 +840,7 @@ defmodule RustyCSV do
   defp expand_formula_entry({prefixes, replacement}) do
     prefixes = if is_list(prefixes), do: prefixes, else: [prefixes]
     replacement_bin = if is_binary(replacement), do: replacement, else: to_string(replacement)
+    validate_non_empty!(:escape_formula_replacement, replacement_bin)
 
     Enum.map(prefixes, fn prefix ->
       prefix = normalize_codepoint(prefix)
@@ -1315,7 +1324,9 @@ defmodule RustyCSV do
 
         * `:strategy` - Encoding strategy. By default, uses a single-threaded
           SIMD-accelerated encoder. Pass `strategy: :parallel` for multi-threaded
-          encoding via rayon, which is faster for quoting-heavy data.
+          encoding via rayon, which is faster for quoting-heavy data. Unknown
+          options and strategy values other than `nil` or `:parallel` raise
+          `ArgumentError`.
 
       ## Examples
 
@@ -1329,8 +1340,14 @@ defmodule RustyCSV do
       @impl RustyCSV
       @spec dump_to_iodata(Enumerable.t(), RustyCSV.dump_options()) :: iodata()
       def dump_to_iodata(enumerable, opts \\ []) do
+        strategy = opts |> Keyword.validate!(strategy: nil) |> Keyword.fetch!(:strategy)
+
+        unless strategy in [nil, :parallel] do
+          raise ArgumentError,
+                "RustyCSV dump strategy must be :parallel or nil, got: #{inspect(strategy)}"
+        end
+
         rows = if is_list(enumerable), do: enumerable, else: Enum.to_list(enumerable)
-        strategy = Keyword.get(opts, :strategy)
 
         result =
           rows
@@ -1357,7 +1374,7 @@ defmodule RustyCSV do
         )
       end
 
-      defp encode_rows_nif(rows, _strategy) do
+      defp encode_rows_nif(rows, nil) do
         RustyCSV.Native.encode_string(
           rows,
           @separator_binaries,
