@@ -18,7 +18,7 @@
    FORCE_RUSTYCSV_BUILD=true MIX_ENV=test mix compile --force --warnings-as-errors
    FORCE_RUSTYCSV_BUILD=true MIX_ENV=test mix test
    FORCE_RUSTYCSV_BUILD=true mix credo --strict
-   FORCE_RUSTYCSV_BUILD=true mix dialyzer
+   FORCE_RUSTYCSV_BUILD=true mix dialyzer --underspecs
    FORCE_RUSTYCSV_BUILD=true mix docs --warnings-as-errors
    mix hex.audit
    cargo audit --file native/rustycsv/Cargo.lock

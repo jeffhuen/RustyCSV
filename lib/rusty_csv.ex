@@ -545,8 +545,8 @@ defmodule RustyCSV do
       via rayon, which is faster for quoting-heavy data.
 
   """
-  @callback dump_to_iodata(Enumerable.t()) :: iodata()
-  @callback dump_to_iodata(Enumerable.t(), dump_options()) :: iodata()
+  @callback dump_to_iodata(Enumerable.t()) :: iolist()
+  @callback dump_to_iodata(Enumerable.t(), dump_options()) :: iolist()
 
   @doc """
   Lazily converts rows to a stream of iodata in CSV format.
@@ -1338,7 +1338,7 @@ defmodule RustyCSV do
 
       """
       @impl RustyCSV
-      @spec dump_to_iodata(Enumerable.t(), RustyCSV.dump_options()) :: iodata()
+      @spec dump_to_iodata(Enumerable.t(), RustyCSV.dump_options()) :: iolist()
       def dump_to_iodata(enumerable, opts \\ []) do
         strategy = opts |> Keyword.validate!(strategy: nil) |> Keyword.fetch!(:strategy)
 

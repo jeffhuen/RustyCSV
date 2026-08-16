@@ -79,6 +79,9 @@ jobs:
         cargo +nightly-2026-07-27 miri test --manifest-path native/rustycsv/Cargo.toml --no-default-features strategy::encode::tests
     - name: Run tests
       run: mix test
+    - name: Dialyzer with underspec checks
+      if: matrix.pair.elixir == '1.20'
+      run: mix dialyzer --underspecs
     - name: Verify packaged source build
       if: matrix.pair.elixir == '1.20'
       run: |
