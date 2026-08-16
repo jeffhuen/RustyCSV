@@ -9,14 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Formula-neutralized fields are now always quoted, with the configured
-  replacement and original value escaped together before the complete field is
-  converted to its target encoding. This prevents malformed CSV from custom
-  replacements and malformed UTF-16/UTF-32 output from mixed encodings. When
-  `escape_formula` is enabled, this intentionally differs from NimbleCSV's byte
-  output while preserving the parsed `replacement <> original` value.
-- Dumping now rejects unknown options and invalid `:strategy` values instead of
-  silently using the serial encoder.
+- `escape_formula` now assembles the replacement and original value into one
+  field before quoting, escaping, and encoding it. This fixes malformed CSV from
+  replacements that contain CSV syntax and invalid UTF-16 and UTF-32 output
+  caused by mixing encoded and unencoded bytes. RustyCSV quotes every matched
+  field. Its output differs byte-for-byte from NimbleCSV, but both parse to the
+  same `replacement <> original` value.
+- `dump_to_iodata/2` now raises `ArgumentError` for unknown options and
+  unsupported `:strategy` values. Previously, either case selected serial
+  encoding without warning.
 
 ## [0.4.2] - 2026-08-14
 
