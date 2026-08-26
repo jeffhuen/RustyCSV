@@ -257,7 +257,7 @@ For memory tracking details, enable the `memory_tracking` feature:
 ```toml
 # In native/rustycsv/Cargo.toml
 [features]
-default = ["mimalloc", "memory_tracking"]
+default = ["memory_tracking"]
 ```
 
 Then rebuild: `FORCE_RUSTYCSV_BUILD=true mix compile --force`

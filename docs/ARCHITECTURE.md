@@ -25,7 +25,7 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 - **Sub-binary memory model** - All batch strategies use sub-binary references (5-14x less memory in the published 0.3.6 benchmark)
 - **Streaming bounded memory** - Memory is bounded by the configured buffer, longest row, and rows retained by the caller
-- **mimalloc allocator** - High-performance allocator for reduced fragmentation
+- **No bundled allocator** - Ships with the system allocator; mimalloc is opt-in (see [Allocator Safety](ALLOCATOR_SAFETY.md))
 - **Optional memory tracking** - Opt-in profiling with zero overhead when disabled
 
 ### Validated Correctness
@@ -377,25 +377,30 @@ See [BENCHMARK.md](BENCHMARK.md#encoding-benchmark-results) for throughput and m
 
 ## Performance Optimizations
 
-### mimalloc Allocator
+### Optional mimalloc Allocator
 
-RustyCSV uses [mimalloc](https://github.com/microsoft/mimalloc) as the default allocator:
+Since 0.4.5 RustyCSV bundles **no** allocator by default. Without the
+`mimalloc` feature nothing sets `#[global_allocator]` and the crate uses the
+system allocator:
 
 ```rust
-#[cfg(feature = "mimalloc")]
+#[cfg(all(feature = "mimalloc", not(feature = "memory_tracking")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 ```
 
-Benefits:
-- 10-20% faster allocation for many small objects
-- Reduced fragmentation
-- No tracking overhead in default configuration
+The default changed because a bundled allocator is a whole-VM decision, not a
+library one: two NIFs in one BEAM that each statically link mimalloc share a
+fixed macOS TLS slot while keeping private page maps, and one copy's
+`mi_realloc` can then silently copy zero bytes over a live block. See
+[Allocator Safety](ALLOCATOR_SAFETY.md) for the mechanism, the measured cost,
+and how to audit your own NIFs.
 
-To disable mimalloc (for exotic build targets):
-```toml
-[dependencies]
-rusty_csv = { version = "0.1", default-features = false }
+To opt back in, after confirming RustyCSV is the only allocator-bundling NIF in
+the VM:
+
+```bash
+RUSTYCSV_ALLOCATOR=mimalloc FORCE_RUSTYCSV_BUILD=1 mix compile
 ```
 
 ### Optional Memory Tracking (Benchmarking Only)
@@ -404,7 +409,7 @@ For profiling Rust-side memory during development and benchmarking, enable the `
 
 ```toml
 [features]
-default = ["mimalloc", "memory_tracking"]
+default = ["memory_tracking"]
 ```
 
 This wraps the allocator with tracking overhead:
@@ -475,7 +480,7 @@ All application code is **zero `unsafe`**. The only `unsafe` in the codebase is 
 - Streaming parser uses `ResourceArc` with proper cleanup
 - Streaming buffer is capped at 256 MB by default (configurable via `:max_buffer_size`)
 - Mutex poisoning on streaming resources raises `:mutex_poisoned` instead of panicking
-- mimalloc wrapped in tracking allocator for observability
+- No bundled allocator by default; the opt-in mimalloc build can be wrapped in the tracking allocator for observability
 - Dedicated rayon thread pool avoids contention with other Rayon users
 
 ## Benchmark Results
@@ -523,4 +528,4 @@ See [COMPLIANCE.md](COMPLIANCE.md) for full details on test suites and validatio
 - [simdjson](https://github.com/simdjson/simdjson) - Inspiration for structural index and prefix-XOR quote detection
 - [std::simd](https://doc.rust-lang.org/std/simd/index.html) - Portable SIMD (used in structural scanner)
 - [rayon crate](https://docs.rs/rayon/latest/rayon/) - Parallel iteration
-- [mimalloc](https://github.com/microsoft/mimalloc) - High-performance allocator
+- [mimalloc](https://github.com/microsoft/mimalloc) - High-performance allocator (opt-in)

@@ -3,7 +3,7 @@
 # Usage: mix run bench/decode_bench.exs
 #
 # For memory tracking (requires feature flag):
-#   1. Edit native/rustycsv/Cargo.toml: default = ["mimalloc", "memory_tracking"]
+#   1. Edit native/rustycsv/Cargo.toml: default = ["memory_tracking"]
 #   2. FORCE_RUSTYCSV_BUILD=true mix compile --force
 #   3. mix run bench/decode_bench.exs
 #
@@ -343,7 +343,7 @@ defmodule DecodeBench do
       IO.puts("\n3-4. Rust NIF Memory: SKIPPED (memory_tracking disabled)")
       IO.puts("   To measure Rust-side allocation for apples-to-apples comparison:")
       IO.puts("   1. Edit native/rustycsv/Cargo.toml:")
-      IO.puts("      default = [\"mimalloc\", \"memory_tracking\"]")
+      IO.puts("      default = [\"memory_tracking\"]")
       IO.puts("   2. Rebuild: FORCE_RUSTYCSV_BUILD=true mix compile --force")
       IO.puts("   3. Re-run this benchmark")
     end

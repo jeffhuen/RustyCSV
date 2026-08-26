@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-08-25
+
+### Fixed
+
+- Fixed a VM-killing segfault when another NIF in the same BEAM also bundles
+  mimalloc. Two statically linked mimalloc copies share a fixed thread-local slot
+  on macOS but keep private page maps, so one copy's `realloc` can be handed a
+  block the other allocated, miss its page-map lookup, report a usable size of 0,
+  and copy zero bytes — freeing the original and returning fresh, uninitialised
+  memory. RustyCSV bundled mimalloc by default through 0.4.4 and was one half of
+  the pair behind three `beam.smp` crashes on 2026-08-25; the reproduction was
+  built against `rusty_csv` 0.4.4. The corruption is symmetric, so the damage
+  lands in whichever library reallocates next, and no validation inside RustyCSV
+  could have detected it — it happens in the allocator, below the library.
+
+### Changed
+
+- `mimalloc` is now an opt-in cargo feature rather than a default, so published
+  artifacts bundle no allocator. Measured on an M1 Pro, the cost is about 22%
+  across a mixed decode/encode workload and is concentrated in the multi-threaded
+  paths: `strategy: :parallel` encoding is 1.5× slower and 64 KB-chunk streaming
+  1.34× slower, while single-threaded encoding is unchanged (within 1%) and
+  single-threaded decoding is 3–8% slower (21% for `headers: true`). To opt back
+  in, after checking RustyCSV is the only allocator-bundling NIF in your VM:
+  `RUSTYCSV_ALLOCATOR=mimalloc FORCE_RUSTYCSV_BUILD=1 mix compile`. See
+  [allocator safety](docs/ALLOCATOR_SAFETY.md).
+
+### Added
+
+- `nif_version_2_18` cargo feature for OTP 29. Not yet wired into `nif_versions`
+  — rustler_precompiled 0.9.0 caps supported versions at 2.17, so OTP 29 keeps
+  loading the 2.17 artifact, which is verified to work correctly.
+- A regression test that fails the build if a default artifact ever links a
+  bundled allocator again.
+
+### Documentation
+
+- Added [allocator safety](docs/ALLOCATOR_SAFETY.md): the hazard, how to audit
+  the other NIFs in your VM, the measured performance tradeoff, and what does not
+  fix it.
+- Corrected the README and architecture notes, which described mimalloc as the
+  default allocator.
+
 ## [0.4.4] - 2026-08-16
 
 ### Fixed

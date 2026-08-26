@@ -16,7 +16,7 @@
 #   When the `memory_tracking` Cargo feature is enabled, the benchmark
 #   prints per-scenario peak NIF heap usage alongside correctness checks.
 #   Enable it via native/rustycsv/Cargo.toml:
-#     default = ["mimalloc", "memory_tracking"]
+#     default = ["memory_tracking"]
 #   then: FORCE_RUSTYCSV_BUILD=1 mix compile --force
 
 # ── Module definitions ──────────────────────────────────────────────────
@@ -78,7 +78,7 @@ defmodule EncodeBench do
     else
       IO.puts("NIF memory tracking: DISABLED")
       IO.puts("  To measure Rust-side allocation for apples-to-apples comparison:")
-      IO.puts("  1. Edit native/rustycsv/Cargo.toml: default = [\"mimalloc\", \"memory_tracking\"]")
+      IO.puts("  1. Edit native/rustycsv/Cargo.toml: default = [\"memory_tracking\"]")
       IO.puts("  2. Rebuild: FORCE_RUSTYCSV_BUILD=true mix compile --force")
       IO.puts("  3. Re-run this benchmark")
     end

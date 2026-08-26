@@ -1,7 +1,7 @@
 defmodule RustyCSV.MixProject do
   use Mix.Project
 
-  @version "0.4.4"
+  @version "0.4.5"
   @source_url "https://github.com/jeffhuen/rustycsv"
 
   def project do
@@ -66,6 +66,7 @@ defmodule RustyCSV.MixProject do
         "docs/ARCHITECTURE.md": [title: "Architecture"],
         "docs/BENCHMARK.md": [title: "Real-World Benchmarks"],
         "docs/COMPLIANCE.md": [title: "Compliance & Validation"],
+        "docs/ALLOCATOR_SAFETY.md": [title: "Allocator Safety"],
         "CHANGELOG.md": [title: "Changelog"],
         LICENSE: [title: "License"]
       ],

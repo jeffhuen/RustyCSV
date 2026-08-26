@@ -1,6 +1,6 @@
 [package]
 name = "rustycsv"
-version = "0.4.4"
+version = "0.4.5"
 authors = ["Jeff Huen"]
 edition = "2021"
 
@@ -40,11 +40,32 @@ missing_safety_doc = "deny"
 panic = "unwind"
 
 [features]
-default = ["mimalloc"]
+# No allocator is bundled by default.
+#
+# A NIF is a shared library loaded into a BEAM that may already host other NIFs.
+# mimalloc linked into a .so keeps its arenas and page map private to that .so,
+# but on macOS it stores the per-thread default heap in a *fixed* TLS slot. Two
+# NIFs that each bundle mimalloc share that slot while keeping separate page
+# maps, so one copy's `mi_realloc` can be handed a block the other allocated,
+# miss its page-map lookup, report a usable size of 0, and copy zero bytes --
+# silently returning fresh memory and freeing the original. That corrupts live
+# terms and takes the whole VM down.
+#
+# See docs/ALLOCATOR_SAFETY.md before enabling `mimalloc`. The
+# `local_dynamic_tls` feature used for musl below does NOT avoid this; the
+# fixed-slot fast path is independent of the TLS model (verified).
+default = []
 mimalloc = ["dep:mimalloc"]
 # Enable memory tracking (adds overhead - use only for profiling)
 memory_tracking = []
-# NIF version features for rustler_precompiled (OTP 24+ = 2.15, OTP 26 = 2.16, OTP 27+ = 2.17)
+# NIF version features for rustler_precompiled
+# (OTP 24+ = 2.15, OTP 26 = 2.16, OTP 27/28 = 2.17, OTP 29 = 2.18)
+# 2.18 is defined here but not yet wired into `nif_versions` in
+# lib/rusty_csv/native.ex: rustler_precompiled 0.9.0 caps
+# `@available_nif_versions` at 2.17, so OTP 29 currently loads the 2.17
+# artifact, which is verified to work correctly. Enable once upstream allows
+# 2.18.
 nif_version_2_15 = ["rustler/nif_version_2_15"]
 nif_version_2_16 = ["rustler/nif_version_2_16"]
 nif_version_2_17 = ["rustler/nif_version_2_17"]
+nif_version_2_18 = ["rustler/nif_version_2_18"]

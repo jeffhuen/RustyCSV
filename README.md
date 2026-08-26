@@ -38,10 +38,10 @@
 | **Encoding support** | ✅ UTF-8, UTF-16, Latin-1, UTF-32 | ✅ |
 | **Memory model** | Sub-binary references | Sub-binary references |
 | **NIF encoding** | ✅ List-shaped iodata | List-shaped iodata |
-| **High-performance allocator** | ✅ mimalloc | System |
+| **High-performance allocator** | Opt-in mimalloc | System |
 | **Drop-in replacement** | ✅ Same API | - |
 | **Headers-to-maps** | ✅ `headers: true` or explicit keys | ❌ |
-| **RFC 4180 compliant** | ✅ 416 ExUnit + 127 Rust tests | ✅ |
+| **RFC 4180 compliant** | ✅ 422 ExUnit + 127 Rust tests | ✅ |
 | **[Benchmark (7MB CSV)](https://rusty-csv.hexdocs.pm/benchmark.html#large-csv-6-82-mb-100k-rows)** | ~20ms | ~233ms |
 
 ## Purpose-Built for Elixir
@@ -93,7 +93,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.4.4"}]
+  [{:rusty_csv, "~> 0.4.5"}]
 end
 ```
 
@@ -380,7 +380,7 @@ All batch strategies share a single-pass SIMD structural scanner that finds fiel
 - Boundary-based sub-binary field references (near-zero BEAM allocation)
 - Hybrid unescaping: sub-binaries for clean fields, copy only when `""` → `"` unescaping needed
 - Direct Erlang term construction via Rustler (no serde)
-- [mimalloc](https://github.com/microsoft/mimalloc) high-performance allocator
+- Optional [mimalloc](https://github.com/microsoft/mimalloc) allocator, opt-in only (see [allocator safety](docs/ALLOCATOR_SAFETY.md))
 
 **`:parallel` specifics:**
 - Runs on dirty CPU schedulers to avoid blocking BEAM
@@ -424,7 +424,7 @@ CSV.dump_to_iodata(rows, strategy: :parallel)
 
 ### High-Throughput Concurrent Exports
 
-RustyCSV's encoding NIF runs on BEAM dirty CPU schedulers with per-thread mimalloc arenas, making it well-suited for concurrent export workloads (e.g., thousands of users downloading CSV reports simultaneously in a Phoenix application):
+RustyCSV's encoding NIF runs on BEAM dirty CPU schedulers, making it well-suited for concurrent export workloads (e.g., thousands of users downloading CSV reports simultaneously in a Phoenix application):
 
 ```elixir
 # Phoenix controller — concurrent CSV download
@@ -465,7 +465,7 @@ end
 
 - Each NIF call is independent — no shared mutable state between requests
 - Dirty CPU schedulers prevent encoding from blocking normal BEAM schedulers
-- mimalloc's per-thread arenas avoid allocator contention under concurrency
+- Allocator contention is the main scaling limit on the `:parallel` strategies; the opt-in mimalloc build recovers that throughput where a bundled allocator is safe (see [allocator safety](docs/ALLOCATOR_SAFETY.md))
 - The real bottleneck is typically DB queries and connection pool sizing, not CSV encoding
 
 ## Architecture
@@ -529,19 +529,23 @@ CSV.parse_stream(stream, max_buffer_size: 10 * 1024 * 1024)
 RustyCSV.Streaming.stream_file("data.csv", max_buffer_size: 1_073_741_824)
 ```
 
-### High-Performance Allocator
+### Bundled allocators
 
-RustyCSV uses [mimalloc](https://github.com/microsoft/mimalloc) as the default allocator, providing:
-- 10-20% faster allocation for many small objects
-- Reduced memory fragmentation
-- Zero tracking overhead in default configuration
+RustyCSV ships with no bundled memory allocator. Bundling one is a whole-VM
+decision rather than a library one: two NIFs that each statically link mimalloc
+silently corrupt each other's heaps on macOS and take the VM down. RustyCSV was
+one half of exactly that pair — it bundled mimalloc by default through 0.4.4.
 
-The distributed NIFs include mimalloc. To test a local source build without it,
-temporarily set `default = []` in `native/rustycsv/Cargo.toml`, then rebuild:
+[mimalloc](https://github.com/microsoft/mimalloc) remains available as an opt-in
+cargo feature, and it is worth real throughput on the multi-threaded paths, but
+read [allocator safety](docs/ALLOCATOR_SAFETY.md) and audit the other NIFs in
+your release before enabling it:
 
 ```bash
-FORCE_RUSTYCSV_BUILD=true mix compile --force
+RUSTYCSV_ALLOCATOR=mimalloc FORCE_RUSTYCSV_BUILD=1 mix compile
 ```
+
+The published precompiled artifacts never bundle an allocator.
 
 ### Optional Memory Tracking (Benchmarking Only)
 
@@ -550,7 +554,7 @@ For profiling Rust-side memory during development and benchmarking. Not intended
 ```toml
 # In native/rustycsv/Cargo.toml
 [features]
-default = ["mimalloc", "memory_tracking"]
+default = ["memory_tracking"]
 ```
 
 ```bash

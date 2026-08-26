@@ -245,6 +245,13 @@ fn scanned_boundaries_to_term<'a>(
 // ============================================================================
 // Allocator Configuration
 // ============================================================================
+//
+// No allocator is bundled by default. With neither `mimalloc` nor
+// `memory_tracking` enabled, nothing below sets `#[global_allocator]` and the
+// crate uses the system allocator. That is deliberate: a NIF is loaded into a
+// BEAM that may already host other NIFs, and two NIFs that each statically
+// link mimalloc corrupt each other's heaps on macOS. Bundling an allocator is
+// a whole-VM decision, not a library one. See docs/ALLOCATOR_SAFETY.md.
 
 // When memory_tracking is enabled, wrap the allocator to track usage
 #[cfg(feature = "memory_tracking")]
@@ -314,7 +321,8 @@ mod tracking {
 #[global_allocator]
 static GLOBAL: tracking::TrackingAllocator = tracking::TrackingAllocator;
 
-// When memory_tracking is disabled, use mimalloc directly (no overhead)
+// When memory_tracking is disabled and `mimalloc` was opted into, use mimalloc
+// directly (no counter overhead).
 #[cfg(all(feature = "mimalloc", not(feature = "memory_tracking")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

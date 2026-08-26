@@ -77,11 +77,26 @@ defmodule RustyCSV.Native do
 
   version = Mix.Project.config()[:version]
 
+  # Optional bundled allocator, opt-in only.
+  #
+  # RustyCSV ships with no bundled allocator. Enabling one is a whole-VM
+  # decision, not a library decision: a NIF is loaded into a BEAM that may
+  # already host other NIFs, and two NIFs that each statically link mimalloc
+  # will corrupt each other's heaps on macOS. See docs/ALLOCATOR_SAFETY.md.
+  #
+  #     RUSTYCSV_ALLOCATOR=mimalloc FORCE_RUSTYCSV_BUILD=1 mix compile
+  cargo_features =
+    case System.get_env("RUSTYCSV_ALLOCATOR") do
+      "mimalloc" -> ["mimalloc"]
+      _ -> []
+    end
+
   use RustlerPrecompiled,
     otp_app: :rusty_csv,
     crate: "rustycsv",
     base_url: "https://github.com/jeffhuen/rustycsv/releases/download/v#{version}",
     force_build: System.get_env("FORCE_RUSTYCSV_BUILD") in ["1", "true"],
+    features: cargo_features,
     nif_versions: ["2.15", "2.16", "2.17"],
     targets:
       Enum.uniq(
@@ -718,7 +733,7 @@ defmodule RustyCSV.Native do
   To enable memory tracking, set the feature in `native/rustycsv/Cargo.toml`:
 
       [features]
-      default = ["mimalloc", "memory_tracking"]
+      default = ["memory_tracking"]
 
   ## Examples
 
