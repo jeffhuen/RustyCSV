@@ -71,6 +71,11 @@ jobs:
       run: |
         cargo test --manifest-path native/rustycsv/Cargo.toml --workspace --locked
         cargo test --manifest-path native/rustycsv/Cargo.toml --workspace --all-features --locked
+    - name: Check x86 native SIMD builds
+      if: matrix.pair.elixir == '1.20'
+      run: |
+        RUSTFLAGS="-C target-cpu=x86-64-v3" cargo check --target x86_64-unknown-linux-gnu --manifest-path native/rustycsv/Cargo.toml --locked
+        RUSTFLAGS="-C target-cpu=x86-64-v4" cargo check --target x86_64-unknown-linux-gnu --manifest-path native/rustycsv/Cargo.toml --locked
     - name: Miri pure Rust parser tests
       if: matrix.pair.elixir == '1.20'
       run: |

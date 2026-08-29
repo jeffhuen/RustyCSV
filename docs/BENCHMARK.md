@@ -252,6 +252,16 @@ mix run bench/decode_bench.exs
 mix run bench/encode_bench.exs
 ```
 
+To benchmark the precompiled AVX2 artifact on an x86-64-v3 CPU, compile the
+dependency before you run the same commands:
+
+```bash
+RUSTYCSV_CPU=avx2 mix deps.compile rusty_csv --force
+```
+
+Compare it with the default portable artifact on the same host and data. Wider
+SIMD does not improve every workload.
+
 For memory tracking details, enable the `memory_tracking` feature:
 
 ```toml

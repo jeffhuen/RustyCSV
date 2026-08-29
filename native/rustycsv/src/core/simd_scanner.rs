@@ -13,7 +13,7 @@
 //! ## Bitmask types
 //!
 //! On current nightly, `Mask::to_bitmask()` returns u64 regardless of lane
-//! count. We mask to the lower 16 bits for CHUNK=16 and operate on u64
+//! count. We mask to the selected 16, 32, or 64 lanes and operate on u64
 //! uniformly.
 //!
 //! ## Optimization notes
@@ -22,14 +22,36 @@
 //!   need ALL structural positions, not just the first one per chunk.
 //! - Prefix-XOR for quote region detection: portable shift-and-xor cascade
 //!   on all targets.
-//! - Processes 16-byte portable-SIMD chunks followed by a scalar tail.
+//! - Precompiled builds use 16-byte portable-SIMD chunks. Source builds with
+//!   `target-cpu=native` use 32-byte AVX2 or 64-byte AVX-512 chunks when the
+//!   build CPU supports them.
 
 use std::simd::prelude::*;
 
 use super::simd_index::{InputTooLarge, RowEnd, StructuralIndex, Violation};
 
-/// Baseline SIMD chunk size (128-bit).
-pub const CHUNK: usize = 16;
+const fn simd_chunk_width(has_avx2: bool, has_avx512: bool) -> usize {
+    if has_avx512 {
+        64
+    } else if has_avx2 {
+        32
+    } else {
+        16
+    }
+}
+
+/// SIMD chunk size selected from compile-time CPU features.
+pub const CHUNK: usize = simd_chunk_width(
+    cfg!(target_feature = "avx2"),
+    cfg!(all(target_feature = "avx512f", target_feature = "avx512bw")),
+);
+
+#[inline]
+const fn width_mask(width: u32) -> u64 {
+    u64::MAX >> (u64::BITS - width)
+}
+
+const CHUNK_MASK: u64 = width_mask(CHUNK as u32);
 
 // ---------------------------------------------------------------------------
 // Prefix-XOR: compute cumulative XOR to determine quoted regions
@@ -39,7 +61,7 @@ pub const CHUNK: usize = 16;
 // prefix_xor(mask) produces a bitmask where bit i is set if position i is
 // inside a quoted region (odd number of quotes before it).
 
-/// Prefix-XOR via shift-and-xor cascade for the lower 16 bits of a u64.
+/// Prefix-XOR via shift-and-xor cascade for the active bits of a u64.
 ///
 /// For these small bit widths the cascade is 6 dependent XOR+shift ops (~6 cycles),
 /// comparable to a single CLMUL/PMULL instruction (~3-4 cycle latency + setup).
@@ -131,7 +153,7 @@ struct ChunkMasks {
 /// into the chunk it has not read yet.
 #[inline]
 fn check_quoting(width: u32, m: &ChunkMasks, next_is_lf: bool, carry: &mut QuoteCarry) -> u64 {
-    let width_mask = (1u64 << width) - 1;
+    let width_mask = width_mask(width);
     let top = 1u64 << (width - 1);
 
     let opening = m.esc & m.quoted;
@@ -230,7 +252,7 @@ pub fn scan_structural(
     let mut violation: Option<Violation> = None;
 
     // -----------------------------------------------------------------------
-    // 16-byte chunks
+    // Compile-time-selected SIMD chunks
     // -----------------------------------------------------------------------
     {
         let esc_splat = Simd::<u8, CHUNK>::splat(escape);
@@ -242,28 +264,26 @@ pub fn scan_structural(
             .map(|&s| Simd::<u8, CHUNK>::splat(s))
             .collect();
 
-        const MASK_16: u64 = (1u64 << 16) - 1;
-
         while pos + CHUNK <= input.len() {
             let chunk = Simd::<u8, CHUNK>::from_slice(&input[pos..pos + CHUNK]);
             let base = pos as u32;
 
-            let esc_mask = chunk.simd_eq(esc_splat).to_bitmask() & MASK_16;
+            let esc_mask = chunk.simd_eq(esc_splat).to_bitmask() & CHUNK_MASK;
 
-            let raw_quoted = prefix_xor(esc_mask) & MASK_16;
-            let quoted = raw_quoted ^ (quote_carry.wrapping_neg() & MASK_16);
+            let raw_quoted = prefix_xor(esc_mask) & CHUNK_MASK;
+            let quoted = raw_quoted ^ (quote_carry.wrapping_neg() & CHUNK_MASK);
 
             quote_carry ^= (esc_mask.count_ones() as u64) & 1;
 
-            let not_quoted = !quoted & MASK_16;
+            let not_quoted = !quoted & CHUNK_MASK;
 
             let mut sep_bits: u64 = 0;
             for splat in &sep_splats {
-                sep_bits |= chunk.simd_eq(*splat).to_bitmask() & MASK_16;
+                sep_bits |= chunk.simd_eq(*splat).to_bitmask() & CHUNK_MASK;
             }
 
-            let lf_raw = chunk.simd_eq(lf_splat).to_bitmask() & MASK_16;
-            let cr_raw = chunk.simd_eq(cr_splat).to_bitmask() & MASK_16;
+            let lf_raw = chunk.simd_eq(lf_splat).to_bitmask() & CHUNK_MASK;
+            let cr_raw = chunk.simd_eq(cr_splat).to_bitmask() & CHUNK_MASK;
 
             let masks = ChunkMasks {
                 esc: esc_mask,
@@ -619,6 +639,18 @@ mod tests {
     // =======================================================================
     // prefix_xor correctness
     // =======================================================================
+
+    #[test]
+    fn simd_width_follows_compile_time_cpu_features() {
+        assert_eq!(simd_chunk_width(false, false), 16);
+        assert_eq!(simd_chunk_width(true, false), 32);
+        assert_eq!(simd_chunk_width(true, true), 64);
+        assert_eq!(width_mask(16), 0xFFFF);
+        assert_eq!(width_mask(32), 0xFFFF_FFFF);
+        assert_eq!(width_mask(64), u64::MAX);
+        assert_eq!(prefix_xor(1), u64::MAX);
+        assert_eq!(prefix_xor(u64::MAX), 0x5555_5555_5555_5555);
+    }
 
     #[test]
     fn test_prefix_xor_known_values() {

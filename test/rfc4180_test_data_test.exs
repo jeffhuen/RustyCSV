@@ -24,7 +24,7 @@ defmodule RFC4180TestDataTest do
 
     expected =
       if File.exists?(json_path) do
-        Jason.decode!(File.read!(json_path))
+        :json.decode(File.read!(json_path))
       else
         nil
       end

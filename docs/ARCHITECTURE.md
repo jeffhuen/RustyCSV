@@ -30,7 +30,7 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 ### Validated Correctness
 
-- **416 ExUnit tests including 5 properties, plus 127 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
+- **422 ExUnit tests including 5 properties, plus 128 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
 - **Cross-strategy validation** - All strategies produce identical output
 - **NimbleCSV compatibility** - The upstream semantic test suites pass against RustyCSV
 
@@ -188,13 +188,13 @@ All batch strategies share a single-pass SIMD structural scanner (`scan_structur
 
 **How it works:**
 
-1. Load 16-byte chunks into portable SIMD registers
+1. Load 16-, 32-, or 64-byte chunks into portable SIMD registers. The compiler selects the width from the target CPU features.
 2. Compare against separator, quote, `\n`, and `\r` characters simultaneously
 3. Use **prefix-XOR** on the quote bitmask to determine which positions are inside quoted regions — a cumulative XOR where bit *i* is set if there's an odd number of quotes before position *i*
 4. Mask out quoted positions, then extract the remaining separator and newline positions into `Vec<u32>` arrays
 5. A `quote_carry` bit tracks quote parity across chunk boundaries
 
-The prefix-XOR uses a portable shift-and-xor cascade on all targets (6 XOR+shift ops on a u64). Architecture-specific intrinsics (CLMUL, PMULL) were evaluated but removed — benchmarks showed no measurable difference for the 16/32-bit masks used in CSV scanning, and removing them keeps the entire scanner free of `unsafe` code.
+The prefix-XOR uses a portable shift-and-xor cascade on all targets (6 XOR+shift ops on a u64). It supports all three mask widths without architecture-specific intrinsics or `unsafe` code.
 
 **`std::simd` API surface:** The scanner uses only the stabilization-safe subset of `portable_simd`: `Simd::from_slice`, `splat`, `simd_eq`, `to_bitmask`, and bitwise ops. It avoids the APIs [blocking stabilization](https://github.com/rust-lang/portable-simd/issues/364) (swizzle, scatter/gather, lane-count generics). No `std::arch` intrinsics are used.
 
@@ -354,7 +354,7 @@ to one binary and one list cell per row.
 Input: Erlang list of lists (rows of binary fields)
   │
   ├─ For each field:
-  │    ├─ SIMD scan: needs quoting? (16-32 bytes/cycle)
+  │    ├─ SIMD scan: needs quoting? (16-64 bytes per vector)
   │    ├─ Check formula trigger (if escape_formula configured)
   │    ├─ Write to Vec<u8>: raw bytes / quoted bytes / quoted formula-neutralized field
   │    └─ If non-UTF-8: encode the complete field to the target encoding
@@ -376,6 +376,21 @@ See [BENCHMARK.md](BENCHMARK.md#encoding-benchmark-results) for throughput and m
 ---
 
 ## Performance Optimizations
+
+### CPU-specific NIF builds
+
+RustyCSV has three CPU build tiers:
+
+| Build | Selection | SIMD width on x86-64 |
+|-------|-----------|----------------------|
+| Portable precompiled NIF | Default | 128-bit |
+| AVX2 precompiled NIF | `RUSTYCSV_CPU=avx2` at compile time | 256-bit |
+| Local source build | `RUSTFLAGS="-C target-cpu=native"` | 128-, 256-, or 512-bit |
+
+The AVX2 artifact targets x86-64-v3. RustyCSV does not probe the CPU. The
+portable artifact remains the default, so a build host cannot silently select
+an incompatible deployment artifact. Local source builds select one SIMD width
+at compile time and keep the same scanner and encoder implementation.
 
 ### Optional mimalloc Allocator
 
@@ -446,7 +461,7 @@ This reduces reallocation overhead during the scan pass.
 
 Pure Elixir CSV parsing is fast — binary pattern matching and sub-binary references are well-optimized on the BEAM. A Rust NIF adds:
 
-1. **SIMD structural scanning** - Process 16-32 bytes per cycle for delimiter/quote detection
+1. **SIMD structural scanning** - Process 16-64 bytes per vector operation for delimiter/quote detection
 2. **Multiple strategies** - Choose the right tool for each workload
 3. **Streaming support** - Process arbitrarily large files with bounded memory
 4. **Reduced scheduler load** - Offload parsing to native code

@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-08-28
+
+### Added
+
+- Local source builds now select the SIMD width from compile-time CPU features:
+  128-bit by default, 256-bit with AVX2, and 512-bit with AVX-512F and
+  AVX-512BW. The parser and encoder share one safe portable-SIMD path.
+- Restored precompiled x86-64-v3 NIFs as an explicit opt-in. Set
+  `RUSTYCSV_CPU=avx2` while compiling the dependency. RustyCSV does not probe
+  the build or deployment CPU, and portable artifacts remain the default.
+- CI checks the AVX2 and AVX-512 source-build paths on x86-64.
+
+### Documentation
+
+- Added instructions for a host-optimized build with
+  `RUSTFLAGS="-C target-cpu=native"`. The precompiled NIFs keep their portable
+  CPU baseline.
+- Documented the build-host compatibility rule and the `x86-64-v3` AVX2 option
+  for workloads where AVX-512 does not help.
+- Documented the required `-crt-static` override for host-optimized musl and
+  Alpine builds.
+- Updated the release guide for 30 portable artifacts and 15 AVX2 variants.
+
 ## [0.4.5] - 2026-08-25
 
 ### Fixed

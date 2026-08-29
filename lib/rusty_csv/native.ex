@@ -65,6 +65,13 @@ defmodule RustyCSV.Native do
   NIF panics while holding the lock, subsequent calls return `:mutex_poisoned`
   instead of crashing the VM.
 
+  ## Precompiled CPU Variant
+
+  Precompiled NIFs use the portable CPU baseline by default. Set
+  `RUSTYCSV_CPU=avx2` while compiling the dependency to select the explicit
+  x86-64-v3 artifact. RustyCSV does not detect CPU features. The deployment
+  CPU must support x86-64-v3.
+
   ## Memory Tracking (Optional)
 
   Memory tracking functions are available but require the `memory_tracking`
@@ -91,6 +98,23 @@ defmodule RustyCSV.Native do
       _ -> []
     end
 
+  # Keep this explicit: the machine that compiles a release may not run it.
+  cpu_variant =
+    case System.get_env("RUSTYCSV_CPU") do
+      value when value in [nil, "", "baseline"] ->
+        :baseline
+
+      "avx2" ->
+        :avx2
+
+      value ->
+        raise ArgumentError,
+              "invalid RUSTYCSV_CPU=#{inspect(value)}; expected \"baseline\" or \"avx2\""
+    end
+
+  avx2_variant = fn _config -> cpu_variant == :avx2 end
+  x86_64_variants = [avx2: avx2_variant]
+
   use RustlerPrecompiled,
     otp_app: :rusty_csv,
     crate: "rustycsv",
@@ -103,6 +127,13 @@ defmodule RustyCSV.Native do
         ["aarch64-apple-darwin", "x86_64-apple-darwin"] ++
           RustlerPrecompiled.Config.default_targets()
       ),
+    variants: %{
+      "x86_64-unknown-linux-gnu" => x86_64_variants,
+      "x86_64-apple-darwin" => x86_64_variants,
+      "x86_64-pc-windows-msvc" => x86_64_variants,
+      "x86_64-pc-windows-gnu" => x86_64_variants,
+      "x86_64-unknown-linux-musl" => x86_64_variants
+    },
     version: version
 
   # ==========================================================================
@@ -628,10 +659,10 @@ defmodule RustyCSV.Native do
   @doc """
   Encode rows to CSV using SIMD-accelerated scanning.
 
-  Uses portable SIMD to scan 16-32 bytes at a time for characters that need
-  escaping. On platforms without SIMD hardware, portable_simd automatically
-  degrades to scalar operations. Falls back to a general encoder for
-  multi-byte separator/escape sequences.
+  Uses portable SIMD to scan 16, 32, or 64 bytes at a time for characters
+  that need escaping. On platforms without SIMD hardware, portable_simd
+  automatically degrades to scalar operations. Falls back to a general
+  encoder for multi-byte separator/escape sequences.
 
   Accepts a list of rows, where each row is a list of binary fields.
   Returns one binary per row as iodata. If any field is not a binary, returns

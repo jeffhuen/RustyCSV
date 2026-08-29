@@ -7,7 +7,7 @@
 //! escapes").
 //!
 //! Scanning strategies:
-//!   SIMD:    portable_simd 16-byte vectorized comparison (fastest)
+//!   SIMD:    portable_simd 16/32/64-byte vectorized comparison
 //!   General: byte-by-byte for multi-byte separator/escape patterns
 
 use std::simd::prelude::*;
@@ -143,7 +143,7 @@ pub fn field_needs_quoting(field: &[u8], reserved: &ReservedPatterns) -> bool {
     let len = field.len();
     let mut pos = 0;
 
-    // 16-byte path
+    // Compile-time-selected SIMD path
     if let Some((&first, rest)) = reserved.single_bytes.split_first() {
         while pos + CHUNK <= len {
             let chunk = Simd::<u8, CHUNK>::from_slice(&field[pos..pos + CHUNK]);

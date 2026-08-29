@@ -20,7 +20,7 @@ defmodule CsvSpectrumTest do
     json_path = Path.join(@fixtures_path, "#{name}.json")
 
     csv = File.read!(csv_path)
-    expected = Jason.decode!(File.read!(json_path))
+    expected = :json.decode(File.read!(json_path))
 
     {csv, expected}
   end

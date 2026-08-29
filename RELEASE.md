@@ -2,7 +2,8 @@
 
 ## Steps
 
-1. Update version in `mix.exs` and `native/rustycsv/Cargo.toml`
+1. Update the version in `mix.exs`, `native/rustycsv/Cargo.toml`, and
+   `native/rustycsv/Cargo.lock`
 2. Update `CHANGELOG.md`
 3. Run the release gates against the final release tree:
    ```bash
@@ -30,13 +31,14 @@
    `git commit -m "Prepare vx.y.z"`
 5. Push to main: `git push origin main`
 6. Trigger NIF build: `gh workflow run release.yml --field version=x.y.z`
-7. **Wait for ALL 30 builds to complete** (~5-10 min)
+7. **Wait for all 45 builds to complete**
    ```bash
    gh run watch <run-id>
    ```
-8. Verify draft release has 30 assets:
+8. Verify that the draft release has 45 assets, including 15 AVX2 variants:
    ```bash
    gh release view vx.y.z --json assets --jq '.assets | length'
+   gh release view vx.y.z --json assets --jq '[.assets[] | select(.name | contains("--avx2"))] | length'
    ```
 9. Publish draft release (assets must be public before checksums can be generated):
    ```bash
@@ -50,7 +52,9 @@
 
 ## Important Notes
 
-- **Do NOT publish the draft release (step 8) until ALL 30 jobs complete and assets are attached**
+- **Do not publish the draft release until all 45 jobs complete and attach their assets**
+- The 30 portable artifacts remain the default. The 15 x86-64-v3 artifacts use
+  the `--avx2` suffix and require explicit `RUSTYCSV_CPU=avx2` selection.
 - The workflow creates a draft release - each job attaches its asset to this draft
 - Publishing too early causes a race condition where later jobs fail to attach their assets
 - Step 7 verifies all assets are present before proceeding
@@ -65,7 +69,7 @@ gh run list --workflow=release.yml
 gh run watch <run-id>
 
 # Check draft release assets
-gh release view vx.y.z --json assets --jq '.assets | length'  # Should be 30
+gh release view vx.y.z --json assets --jq '.assets | length'  # Must be 45
 gh release view vx.y.z --json assets --jq '.assets[].name'
 
 # If something goes wrong, delete and retry

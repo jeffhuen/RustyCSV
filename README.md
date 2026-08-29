@@ -3,7 +3,7 @@
 **Ultra-fast CSV parsing and encoding for Elixir.** A purpose-built Rust NIF with SIMD acceleration, parallel parsing, and bounded-memory streaming. Drop-in replacement for NimbleCSV.
 
 [![Hex.pm](https://img.shields.io/hexpm/v/rusty_csv.svg)](https://hex.pm/packages/rusty_csv)
-[![Tests](https://img.shields.io/badge/tests-416%20ExUnit%20%2B%20127%20Rust-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-422%20ExUnit%20%2B%20128%20Rust-brightgreen.svg)]()
 [![RFC 4180](https://img.shields.io/badge/RFC%204180-compliant-blue.svg)]()
 
 ## Why RustyCSV?
@@ -41,7 +41,7 @@
 | **High-performance allocator** | Opt-in mimalloc | System |
 | **Drop-in replacement** | ✅ Same API | - |
 | **Headers-to-maps** | ✅ `headers: true` or explicit keys | ❌ |
-| **RFC 4180 compliant** | ✅ 422 ExUnit + 127 Rust tests | ✅ |
+| **RFC 4180 compliant** | ✅ 422 ExUnit + 128 Rust tests | ✅ |
 | **[Benchmark (7MB CSV)](https://rusty-csv.hexdocs.pm/benchmark.html#large-csv-6-82-mb-100k-rows)** | ~20ms | ~233ms |
 
 ## Purpose-Built for Elixir
@@ -93,7 +93,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.4.5"}]
+  [{:rusty_csv, "~> 0.4.6"}]
 end
 ```
 
@@ -101,6 +101,58 @@ Precompiled NIFs are provided for supported targets through RustlerPrecompiled,
 so normal installation does not require Rust. Building locally or targeting an
 unsupported platform requires Rust nightly for `std::simd`; see
 [SIMD and Rust Nightly](#simd-and-rust-nightly).
+
+| Build | Selection | SIMD width on x86-64 |
+|-------|-----------|----------------------|
+| Portable precompiled NIF | Default | 128-bit |
+| AVX2 precompiled NIF | `RUSTYCSV_CPU=avx2` | 256-bit |
+| Local source build | `target-cpu=native` | 128-, 256-, or 512-bit |
+
+### Use the precompiled AVX2 NIF
+
+The AVX2 artifact targets x86-64-v3. It does not require Rust. Select it when
+you compile the dependency:
+
+```bash
+RUSTYCSV_CPU=avx2 mix deps.compile rusty_csv --force
+```
+
+RustyCSV does not inspect the build or deployment CPU. Use this option only
+when every deployment CPU supports x86-64-v3. An incompatible NIF can fail
+with an illegal-instruction error. Set the variable in the environment that
+builds your Elixir release; setting it only when the release starts is too late.
+
+### Build for your CPU
+
+A local source build can use the full SIMD width of the build CPU. Run this
+command after `mix deps.get`:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" FORCE_RUSTYCSV_BUILD=1 mix deps.compile rusty_csv --force
+```
+
+On Alpine Linux or another musl target, keep the dynamic-library flag that
+`RUSTFLAGS` replaces:
+
+```bash
+RUSTFLAGS="-C target-cpu=native -C target-feature=-crt-static" FORCE_RUSTYCSV_BUILD=1 mix deps.compile rusty_csv --force
+```
+
+On x86-64, RustyCSV selects 256-bit SIMD when the CPU supports AVX2. It selects
+512-bit SIMD when the CPU supports AVX-512F and AVX-512BW. Other CPUs keep the
+portable 128-bit width.
+
+Build the NIF on the deployment host or on a machine with the same CPU
+features. `target-cpu=native` records the build CPU's instruction set in the
+binary. A NIF built on a newer CPU can fail with an illegal-instruction error
+on an older CPU.
+
+Wider SIMD does not make every workload faster. Benchmark your data. To compare
+AVX2 with AVX-512 on an AVX-512 host, build the AVX2 version with:
+
+```bash
+RUSTFLAGS="-C target-cpu=x86-64-v3" FORCE_RUSTYCSV_BUILD=1 mix deps.compile rusty_csv --force
+```
 
 ## Quick Start
 
@@ -346,7 +398,7 @@ RustyCSV is **fully RFC 4180 compliant** and validated against industry-standard
 | Streaming safety | ✅ All pass |
 | Concurrent access | ✅ All pass |
 | 0.4.1 parity regressions | ✅ All pass |
-| **ExUnit suite total** | **416, including 5 properties** |
+| **ExUnit suite total** | **422, including 5 properties** |
 
 See [Compliance and Validation](https://rusty-csv.hexdocs.pm/compliance.html) for full details.
 
@@ -581,7 +633,7 @@ RustyCSV uses Rust's [`std::simd`](https://doc.rust-lang.org/std/simd/index.html
 
 We deliberately avoid the APIs that are [blocking stabilization](https://github.com/rust-lang/portable-simd/issues/364): swizzle, scatter/gather, and lane-count generics (`LaneCount<N>: SupportedLaneCount`). The items blocking the `portable_simd` [tracking issue](https://github.com/rust-lang/rust/issues/86656) — mask semantics, supported vector size limits, and swizzle design — are unrelated to the operations we use. When `std::simd` stabilizes, RustyCSV will work on stable Rust with no code changes.
 
-The prefix-XOR quote detection uses a portable shift-and-xor cascade rather than architecture-specific intrinsics, keeping the entire scanner free of `unsafe` code. Benchmarks show no measurable difference for the 16/32-bit masks used in CSV scanning.
+The prefix-XOR quote detection uses a portable shift-and-xor cascade rather than architecture-specific intrinsics. It handles the 16-, 32-, and 64-bit masks without `unsafe` code.
 
 ## Development
 
@@ -592,7 +644,7 @@ mix deps.get
 # Compile (includes Rust NIF)
 mix compile
 
-# Run tests (416 ExUnit tests)
+# Run tests (422 ExUnit tests)
 mix test
 
 # Run benchmarks
