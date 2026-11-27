@@ -74,7 +74,7 @@ defmodule RustyCSV do
   Convert rows back to CSV format:
 
       CSV.dump_to_iodata([["name", "age"], ["john", "27"]])
-      #=> [["name,age\n"], ["john,27\n"]]
+      #=> [["name,age\r\n"], ["john,27\r\n"]]
 
   Encoding uses SIMD-accelerated Rust NIFs and returns one top-level iodata list
   per row, matching NimbleCSV's public return shape. Use
@@ -103,9 +103,10 @@ defmodule RustyCSV do
 
   ### High-Throughput Concurrent Exports
 
-  The encoding NIF runs on dirty CPU schedulers with per-thread mimalloc
-  arenas, making it suitable for concurrent export workloads — e.g.,
-  thousands of users downloading CSV reports simultaneously:
+  The encoding NIF runs on dirty CPU schedulers and keeps no mutable state
+  between calls, so concurrent requests encode CSV reports without blocking
+  normal schedulers. For allocator tuning on parallel workloads, see
+  `docs/ALLOCATOR_SAFETY.md`:
 
       # Phoenix controller — each request encodes independently
       rows = MyApp.Reports.fetch_rows(user_id)
@@ -464,33 +465,70 @@ defmodule RustyCSV do
 
   defmodule ParseError do
     @moduledoc """
-    Exception raised when CSV parsing fails.
+    Exception raised when CSV parsing or input encoding conversion fails.
+
+    RustyCSV never includes raw CSV field contents in error messages.
 
     ## Fields
 
       * `:message` - Human-readable error description
+      * `:line` - 1-based line number of the error, or `nil` for encoding errors
+      * `:column` - 1-based column number (Unicode scalar offset) of the error,
+        or `nil` for encoding errors
+      * `:byte_offset` - 0-based byte offset in the input, or `nil` when unavailable
+      * `:reason` - Stable error category atom:
+        * `:unexpected_quote` - Escape character appeared inside an unquoted field
+        * `:trailing_garbage` - Unexpected data followed a closing escape character
+        * `:unterminated_quote` - Input ended inside a quoted field
+        * `:invalid_encoding` - Invalid byte sequence in the configured encoding
+        * `:incomplete_encoding` - Incomplete multi-byte sequence in the configured encoding
+        * `:truncated_encoding` - Truncated multi-byte sequence at end of stream
 
     """
-    defexception [:message]
+    defexception [:message, :line, :column, :byte_offset, :reason]
+
+    @type reason ::
+            :unexpected_quote
+            | :trailing_garbage
+            | :unterminated_quote
+            | :invalid_encoding
+            | :incomplete_encoding
+            | :truncated_encoding
+            | nil
+
+    @type t :: %__MODULE__{
+            message: String.t(),
+            line: pos_integer() | nil,
+            column: pos_integer() | nil,
+            byte_offset: non_neg_integer() | nil,
+            reason: reason()
+          }
 
     @impl true
     def message(%{message: message}), do: message
 
     @doc false
-    def unwrap!({:error, {:malformed_csv, category, position}}) do
-      raise __MODULE__, message: malformed_message(category, position)
+    def unwrap!({:error, {:malformed_csv, category, position, line, column}}) do
+      raise __MODULE__,
+        message: malformed_message(category, position, line, column),
+        line: line,
+        column: column,
+        byte_offset: position,
+        reason: category
     end
 
     def unwrap!(result), do: result
 
-    defp malformed_message(:unexpected_quote, position),
-      do: "unexpected escape character at byte #{position}"
+    defp malformed_message(:unexpected_quote, position, line, column),
+      do: "unexpected escape character at line #{line}, column #{column} (byte #{position})"
 
-    defp malformed_message(:trailing_garbage, position),
-      do: "unexpected data after a closing escape at byte #{position}"
+    defp malformed_message(:trailing_garbage, position, line, column),
+      do:
+        "unexpected data after a closing escape at line #{line}, column #{column} (byte #{position})"
 
-    defp malformed_message(:unterminated_quote, position),
-      do: "expected a closing escape before end of input at byte #{position}"
+    defp malformed_message(:unterminated_quote, position, line, column),
+      do:
+        "expected a closing escape before end of input at line #{line}, column #{column} (byte #{position})"
   end
 
   # ==========================================================================
@@ -585,7 +623,7 @@ defmodule RustyCSV do
       Defaults to `"\""`.
 
     * `:newlines` - List of recognized line endings for parsing.
-      Defaults to `["\r\n", "\n"]`. Both CRLF and LF are always recognized.
+      Defaults to `["\r\n", "\n"]`. Passing custom newlines overrides the defaults.
 
     * `:trim_bom` - When `true`, removes the BOM (byte order marker)
       from the beginning of strings before parsing. Defaults to `false`.
@@ -623,7 +661,7 @@ defmodule RustyCSV do
       spreadsheet application's import and save behavior. Triggers and
       replacements must normalize to non-empty binaries. Defaults to `nil`.
 
-      Example: `%{["=", "+", "-", "@"] => "'"}`
+      Example: `%{["@", "+", "-", "=", "\t", "\r"] => "'"}`
 
   ### Strategy Options
 
@@ -690,6 +728,8 @@ defmodule RustyCSV do
   # Private: Option Extraction and Validation
   # ==========================================================================
 
+  @valid_strategies [:simd, :basic, :indexed, :parallel, :zero_copy]
+
   defp extract_and_validate_options(options) do
     separator = Keyword.get(options, :separator, ",") |> normalize_codepoint()
     escape = Keyword.get(options, :escape, "\"") |> normalize_codepoint()
@@ -702,10 +742,12 @@ defmodule RustyCSV do
     validate_non_empty!(:escape, escape)
     escape_binary = escape
 
-    line_separator = Keyword.get(options, :line_separator, "\n")
-    newlines = Keyword.get(options, :newlines, ["\r\n", "\n"])
-    trim_bom = Keyword.get(options, :trim_bom, false)
-    dump_bom = Keyword.get(options, :dump_bom, false)
+    line_separator = Keyword.get(options, :line_separator, "\n") |> normalize_codepoint()
+    validate_binary!(:line_separator, line_separator)
+
+    newlines = Keyword.get(options, :newlines, ["\r\n", "\n"]) |> validate_newlines!()
+    trim_bom = Keyword.get(options, :trim_bom, false) |> validate_boolean!(:trim_bom)
+    dump_bom = Keyword.get(options, :dump_bom, false) |> validate_boolean!(:dump_bom)
 
     reserved =
       Keyword.get_lazy(options, :reserved, fn ->
@@ -714,7 +756,7 @@ defmodule RustyCSV do
 
     reserved_binaries = validate_reserved!(reserved)
     escape_formula = Keyword.get(options, :escape_formula, nil)
-    default_strategy = Keyword.get(options, :strategy, :simd)
+    default_strategy = Keyword.get(options, :strategy, :simd) |> validate_strategy!()
     moduledoc = Keyword.get(options, :moduledoc)
 
     # Encoding support
@@ -796,6 +838,41 @@ defmodule RustyCSV do
             "Supported: :utf8, :latin1, {:utf16, :little}, {:utf16, :big}, {:utf32, :little}, {:utf32, :big}"
   end
 
+  defp validate_binary!(name, value) do
+    unless is_binary(value) do
+      raise ArgumentError, "RustyCSV requires a binary #{name}, got: #{inspect(value)}"
+    end
+
+    value
+  end
+
+  defp validate_boolean!(value, _name) when is_boolean(value), do: value
+
+  defp validate_boolean!(value, name) do
+    raise ArgumentError,
+          "RustyCSV requires a boolean :#{name} option, got: #{inspect(value)}"
+  end
+
+  defp validate_strategy!(strategy) when strategy in @valid_strategies, do: strategy
+
+  defp validate_strategy!(strategy) do
+    raise ArgumentError,
+          "invalid :strategy option, expected one of #{inspect(@valid_strategies)}, got: #{inspect(strategy)}"
+  end
+
+  defp validate_newlines!(newlines) when is_list(newlines) and newlines != [] do
+    Enum.map(newlines, fn pattern ->
+      pattern = normalize_codepoint(pattern)
+      validate_non_empty!(:newlines, pattern)
+      pattern
+    end)
+  end
+
+  defp validate_newlines!(newlines) do
+    raise ArgumentError,
+          "RustyCSV :newlines must be a non-empty list of non-empty binaries, got: #{inspect(newlines)}"
+  end
+
   defp validate_reserved!(reserved) when is_list(reserved) do
     Enum.map(reserved, fn pattern ->
       pattern = normalize_codepoint(pattern)
@@ -835,6 +912,11 @@ defmodule RustyCSV do
   defp build_formula_nif_config(map) when is_map(map) do
     map
     |> Enum.flat_map(&expand_formula_entry/1)
+  end
+
+  defp build_formula_nif_config(other) do
+    raise ArgumentError,
+          "RustyCSV :escape_formula must be a map or nil, got: #{inspect(other)}"
   end
 
   defp expand_formula_entry({prefixes, replacement}) do
@@ -945,22 +1027,32 @@ defmodule RustyCSV do
         headers = Keyword.get(opts, :headers, false)
         strategy = Keyword.get(opts, :strategy, @default_strategy)
         strict = Keyword.get(opts, :strict, true)
+        skip_headers = Keyword.get(opts, :skip_headers, true)
 
         unless is_boolean(strict) do
           raise ArgumentError,
                 "invalid :strict option, expected a boolean, got: #{inspect(strict)}"
         end
 
+        unless is_boolean(skip_headers) do
+          raise ArgumentError,
+                "invalid :skip_headers option, expected a boolean, got: #{inspect(skip_headers)}"
+        end
+
+        unless strategy in [:simd, :basic, :indexed, :parallel, :zero_copy] do
+          raise ArgumentError,
+                "invalid :strategy option, expected one of [:simd, :basic, :indexed, :parallel, :zero_copy], got: #{inspect(strategy)}"
+        end
+
         string = string |> maybe_trim_bom() |> maybe_to_utf8()
-        do_parse_string_with_headers(string, strategy, headers, opts, strict)
+        do_parse_string_with_headers(string, strategy, headers, skip_headers, strict)
       end
     end
   end
 
   defp quoted_parse_string_headers_clauses do
     quote do
-      defp do_parse_string_with_headers(string, strategy, false, opts, strict) do
-        skip_headers = Keyword.get(opts, :skip_headers, true)
+      defp do_parse_string_with_headers(string, strategy, false, skip_headers, strict) do
         rows = string |> do_parse_string(strategy, strict) |> RustyCSV.ParseError.unwrap!()
 
         case {skip_headers, rows} do
@@ -969,24 +1061,27 @@ defmodule RustyCSV do
         end
       end
 
-      defp do_parse_string_with_headers(string, strategy, true, _opts, strict) do
+      defp do_parse_string_with_headers(string, strategy, true, _skip_headers, strict) do
         string
         |> do_parse_to_maps(strategy, true, true, strict)
         |> RustyCSV.ParseError.unwrap!()
       end
 
-      defp do_parse_string_with_headers(string, strategy, header_list, opts, strict)
-           when is_list(header_list) do
-        skip_headers = Keyword.get(opts, :skip_headers, true)
-
+      defp do_parse_string_with_headers(
+             string,
+             strategy,
+             [_ | _] = header_list,
+             skip_headers,
+             strict
+           ) do
         string
         |> do_parse_to_maps(strategy, header_list, skip_headers, strict)
         |> RustyCSV.ParseError.unwrap!()
       end
 
-      defp do_parse_string_with_headers(_string, _strategy, other, _opts, _strict) do
+      defp do_parse_string_with_headers(_string, _strategy, other, _skip_headers, _strict) do
         raise ArgumentError,
-              "invalid :headers option, expected false, true, or a list of keys, got: #{inspect(other)}"
+              "invalid :headers option, expected false, true, or a non-empty list of keys, got: #{inspect(other)}"
       end
     end
   end
@@ -1052,13 +1147,17 @@ defmodule RustyCSV do
             raise RustyCSV.ParseError,
               message:
                 "Incomplete #{inspect(unquote(Macro.escape(encoding)))} sequence: " <>
-                  "converted #{byte_size(converted)} bytes, #{byte_size(rest)} bytes remaining"
+                  "converted #{byte_size(converted)} bytes, #{byte_size(rest)} bytes remaining",
+              byte_offset: byte_size(converted),
+              reason: :incomplete_encoding
 
           {:error, converted, rest} ->
             raise RustyCSV.ParseError,
               message:
                 "Invalid #{inspect(unquote(Macro.escape(encoding)))} sequence after " <>
-                  "#{byte_size(converted)} converted bytes (#{byte_size(rest)} bytes rejected)"
+                  "#{byte_size(converted)} converted bytes (#{byte_size(rest)} bytes rejected)",
+              byte_offset: byte_size(converted),
+              reason: :invalid_encoding
         end
       end
     end
@@ -1155,10 +1254,16 @@ defmodule RustyCSV do
         headers = Keyword.get(opts, :headers, false)
         chunk_size = Keyword.get(opts, :chunk_size, 64 * 1024)
         strict = Keyword.get(opts, :strict, true)
+        skip_headers = Keyword.get(opts, :skip_headers, true)
 
         unless is_boolean(strict) do
           raise ArgumentError,
                 "invalid :strict option, expected a boolean, got: #{inspect(strict)}"
+        end
+
+        unless is_boolean(skip_headers) do
+          raise ArgumentError,
+                "invalid :skip_headers option, expected a boolean, got: #{inspect(skip_headers)}"
         end
 
         stream_opts = [
@@ -1180,22 +1285,22 @@ defmodule RustyCSV do
 
         result_stream = RustyCSV.Streaming.stream_enumerable(stream, stream_opts)
 
-        do_stream_with_headers(result_stream, headers, opts)
+        do_stream_with_headers(result_stream, headers, skip_headers)
       end
     end
   end
 
   defp quoted_stream_headers_clauses do
     quote do
-      defp do_stream_with_headers(stream, false, opts) do
-        if Keyword.get(opts, :skip_headers, true) do
+      defp do_stream_with_headers(stream, false, skip_headers) do
+        if skip_headers do
           Stream.drop(stream, 1)
         else
           stream
         end
       end
 
-      defp do_stream_with_headers(stream, true, _opts) do
+      defp do_stream_with_headers(stream, true, _skip_headers) do
         Stream.transform(stream, :no_header, fn
           row, :no_header ->
             {[], {:header, row, length(row)}}
@@ -1205,16 +1310,16 @@ defmodule RustyCSV do
         end)
       end
 
-      defp do_stream_with_headers(stream, header_list, opts) when is_list(header_list) do
+      defp do_stream_with_headers(stream, [_ | _] = header_list, skip_headers) do
         num_keys = length(header_list)
         state = {:header, header_list, num_keys}
-        base = if Keyword.get(opts, :skip_headers, true), do: Stream.drop(stream, 1), else: stream
+        base = if skip_headers, do: Stream.drop(stream, 1), else: stream
         Stream.map(base, &zip_to_map(state, &1))
       end
 
-      defp do_stream_with_headers(_stream, other, _opts) do
+      defp do_stream_with_headers(_stream, other, _skip_headers) do
         raise ArgumentError,
-              "invalid :headers option, expected false, true, or a list of keys, got: #{inspect(other)}"
+              "invalid :headers option, expected false, true, or a non-empty list of keys, got: #{inspect(other)}"
       end
     end
   end

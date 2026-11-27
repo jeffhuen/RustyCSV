@@ -30,7 +30,7 @@ Unlike projects that wrap existing Rust crates (like the excellent `csv` crate),
 
 ### Validated Correctness
 
-- **422 ExUnit tests including 5 properties, plus 128 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, and headers-to-maps
+- **432 ExUnit tests including 5 properties, plus 134 Rust tests** covering RFC 4180, industry test suites, edge cases, encodings, multi-byte separators/escapes, headers-to-maps, and structured `ParseError` locations
 - **Cross-strategy validation** - All strategies produce identical output
 - **NimbleCSV compatibility** - The upstream semantic test suites pass against RustyCSV
 
@@ -94,15 +94,7 @@ RustyCSV is designed as a drop-in replacement for NimbleCSV. It implements the c
 
 ### Migration
 
-```elixir
-# Before
-alias NimbleCSV.RFC4180, as: CSV
-
-# After
-alias RustyCSV.RFC4180, as: CSV
-
-# All function calls work identically.
-```
+See the [migration and upgrade guide](MIGRATION.md) for NimbleCSV migration steps and version upgrade notes.
 
 ### RustyCSV Extensions
 
@@ -476,14 +468,16 @@ NIFs should complete in under 1ms to avoid blocking schedulers.
 
 | Approach | Used By | Description |
 |----------|---------|-------------|
-| Dirty Schedulers | All batch NIFs, `streaming_feed`, `streaming_next_rows`, `streaming_finalize` | Separate from normal schedulers |
+| Dirty Schedulers | All batch parsing, map parsing, encoding, and lock-acquiring streaming NIFs | Separate from normal schedulers |
 | Chunked Processing | streaming | Return control between chunks |
 | Stateful Resource | streaming | Let Elixir control iteration |
 | Fast SIMD | all others | Complete quickly via hardware acceleration |
 
-All 12 NIFs that process unbounded input run on dirty CPU schedulers. Only trivial O(1)
-NIFs (`streaming_new`, `streaming_status`, `streaming_set_max_buffer`, memory tracking)
-remain on the normal scheduler.
+All batch parsing, map parsing, encoding, and lock-acquiring streaming NIFs
+(`streaming_feed`, `streaming_next_rows`, `streaming_finalize`,
+`streaming_status`, `streaming_set_max_buffer`) run on dirty CPU schedulers.
+Only trivial lock-free O(1) NIFs (`streaming_new`, `streaming_new_with_config`,
+and memory tracking) remain on the normal scheduler.
 
 ### Memory Safety
 
@@ -529,9 +523,11 @@ RustyCSV is validated against industry-standard CSV test suites to ensure correc
 
 See [COMPLIANCE.md](COMPLIANCE.md) for full details on test suites and validation methodology.
 
-## Future Work
+## Error positions
 
-- **Error positions**: Line/column numbers in ParseError
+Strict quoting violations populate four structured fields on `RustyCSV.ParseError`: 1-based `:line`, 1-based `:column`, 0-based `:byte_offset`, and a `:reason` atom. Error messages omit raw CSV field contents.
+
+Batch parsers compute `:line` and `:column` only when a violation occurs, so valid CSV does no extra work. Streaming parsers count discarded newlines when compacting their buffers so positions stay exact across chunk boundaries and compaction.
 
 ## References
 

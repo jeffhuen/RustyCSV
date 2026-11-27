@@ -46,14 +46,16 @@ defmodule RustyCSV.Native do
   | Strategy | Use Case | Memory Model |
   |----------|----------|--------------|
   | `parse_string/1` et al. | Default, most files | Sub-binary (hybrid) |
-  | `parse_string_parallel/1` | Large files 500MB+ | Owned copy |
+  | `parse_string_parallel/1` | Large files 500MB+ | Sub-binary (hybrid) |
   | `streaming_*` | Unbounded files, >4 GiB | Owned copy (per chunk) |
 
   ## Scheduling
 
-  All parsing NIFs run on BEAM dirty CPU schedulers to avoid blocking
-  normal schedulers. This includes all `parse_string*` functions,
-  `streaming_feed/2`, `streaming_next_rows/2`, and `streaming_finalize/1`.
+  All parsing, encoding, and lock-acquiring streaming NIFs run on BEAM dirty
+  CPU schedulers to avoid blocking normal schedulers. This includes all
+  `parse_string*`, `parse_to_maps*`, `encode_string*`, `streaming_feed/2`,
+  `streaming_next_rows/2`, `streaming_finalize/1`, `streaming_status/1`, and
+  `streaming_set_max_buffer/2` functions.
 
   Parallel parsing runs on a dedicated named `rustycsv-*` rayon thread pool
   (capped at 8 threads) rather than the global rayon pool.
@@ -121,7 +123,7 @@ defmodule RustyCSV.Native do
     base_url: "https://github.com/jeffhuen/rustycsv/releases/download/v#{version}",
     force_build: System.get_env("FORCE_RUSTYCSV_BUILD") in ["1", "true"],
     features: cargo_features,
-    nif_versions: ["2.15", "2.16", "2.17"],
+    nif_versions: ["2.15", "2.16", "2.17", "2.18"],
     targets:
       Enum.uniq(
         ["aarch64-apple-darwin", "x86_64-apple-darwin"] ++
@@ -154,7 +156,7 @@ defmodule RustyCSV.Native do
           {:error, :input_too_large}
           | {:error,
              {:malformed_csv, :unexpected_quote | :trailing_garbage | :unterminated_quote,
-              non_neg_integer()}}
+              non_neg_integer(), pos_integer(), pos_integer()}}
 
   @typedoc "Native encoding retry signal for wrappers that accept non-binary fields"
   @type encode_error :: {:error, :non_binary_field}
@@ -209,27 +211,28 @@ defmodule RustyCSV.Native do
     * `csv` - The CSV binary to parse
     * `separator` - Integer byte, binary, or list of binaries (see "Separator Format" above)
     * `escape` - Integer byte or binary (see "Escape Format" above)
+    * `newlines` - `:default` for `["\\r\\n", "\\n"]`, or a non-empty list of newline binaries
 
   ## Examples
 
       # TSV parsing with integer separator
-      iex> RustyCSV.Native.parse_string_with_config("a\\tb\\n1\\t2\\n", 9, 34)
+      iex> RustyCSV.Native.parse_string_with_config("a\\tb\\n1\\t2\\n", 9, 34, :default)
       [["a", "b"], ["1", "2"]]
 
       # TSV parsing with binary separator
-      iex> RustyCSV.Native.parse_string_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34)
+      iex> RustyCSV.Native.parse_string_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34, :default)
       [["a", "b"], ["1", "2"]]
 
       # Multi-separator parsing (comma or semicolon)
-      iex> RustyCSV.Native.parse_string_with_config("a,b;c\\n1;2,3\\n", [<<44>>, <<59>>], 34)
+      iex> RustyCSV.Native.parse_string_with_config("a,b;c\\n1;2,3\\n", [<<44>>, <<59>>], 34, :default)
       [["a", "b", "c"], ["1", "2", "3"]]
 
       # Multi-byte separator
-      iex> RustyCSV.Native.parse_string_with_config("a::b::c\\n", "::", 34)
+      iex> RustyCSV.Native.parse_string_with_config("a::b::c\\n", "::", 34, :default)
       [["a", "b", "c"]]
 
       # Multi-byte escape
-      iex> RustyCSV.Native.parse_string_with_config("$$hello$$,world\\n", 44, "$$")
+      iex> RustyCSV.Native.parse_string_with_config("$$hello$$,world\\n", 44, "$$", :default)
       [["hello", "world"]]
 
   """
@@ -268,11 +271,11 @@ defmodule RustyCSV.Native do
   ## Examples
 
       # TSV parsing with integer separator
-      iex> RustyCSV.Native.parse_string_fast_with_config("a\\tb\\n1\\t2\\n", 9, 34)
+      iex> RustyCSV.Native.parse_string_fast_with_config("a\\tb\\n1\\t2\\n", 9, 34, :default)
       [["a", "b"], ["1", "2"]]
 
       # TSV parsing with binary separator
-      iex> RustyCSV.Native.parse_string_fast_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34)
+      iex> RustyCSV.Native.parse_string_fast_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34, :default)
       [["a", "b"], ["1", "2"]]
 
   """
@@ -311,11 +314,11 @@ defmodule RustyCSV.Native do
   ## Examples
 
       # TSV parsing with integer separator
-      iex> RustyCSV.Native.parse_string_indexed_with_config("a\\tb\\n1\\t2\\n", 9, 34)
+      iex> RustyCSV.Native.parse_string_indexed_with_config("a\\tb\\n1\\t2\\n", 9, 34, :default)
       [["a", "b"], ["1", "2"]]
 
       # TSV parsing with binary separator
-      iex> RustyCSV.Native.parse_string_indexed_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34)
+      iex> RustyCSV.Native.parse_string_indexed_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34, :default)
       [["a", "b"], ["1", "2"]]
 
   """
@@ -361,20 +364,21 @@ defmodule RustyCSV.Native do
 
     * `separator` - Integer byte, binary, or list of binaries (see "Separator Format" above)
     * `escape` - Integer byte or binary (see "Escape Format" above)
+    * `newlines` - `:default` for `["\\r\\n", "\\n"]`, or a non-empty list of newline binaries
 
   ## Examples
 
       # TSV streaming parser with integer separator
-      parser = RustyCSV.Native.streaming_new_with_config(9, 34)
+      parser = RustyCSV.Native.streaming_new_with_config(9, 34, :default)
 
       # TSV streaming parser with binary separator
-      parser = RustyCSV.Native.streaming_new_with_config(<<9>>, 34)
+      parser = RustyCSV.Native.streaming_new_with_config(<<9>>, 34, :default)
 
       # Multi-separator streaming parser
-      parser = RustyCSV.Native.streaming_new_with_config([<<44>>, <<59>>], 34)
+      parser = RustyCSV.Native.streaming_new_with_config([<<44>>, <<59>>], 34, :default)
 
       # Multi-byte separator streaming parser
-      parser = RustyCSV.Native.streaming_new_with_config("::", 34)
+      parser = RustyCSV.Native.streaming_new_with_config("::", 34, :default)
 
   """
   @spec streaming_new_with_config(separator(), escape(), term()) :: parser_ref()
@@ -488,11 +492,11 @@ defmodule RustyCSV.Native do
   ## Examples
 
       # TSV parallel parsing with integer separator
-      iex> RustyCSV.Native.parse_string_parallel_with_config("a\\tb\\n1\\t2\\n", 9, 34)
+      iex> RustyCSV.Native.parse_string_parallel_with_config("a\\tb\\n1\\t2\\n", 9, 34, :default)
       [["a", "b"], ["1", "2"]]
 
       # TSV parallel parsing with binary separator
-      iex> RustyCSV.Native.parse_string_parallel_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34)
+      iex> RustyCSV.Native.parse_string_parallel_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34, :default)
       [["a", "b"], ["1", "2"]]
 
   """
@@ -531,11 +535,11 @@ defmodule RustyCSV.Native do
   ## Examples
 
       # TSV parsing with integer separator
-      iex> RustyCSV.Native.parse_string_zero_copy_with_config("a\\tb\\n1\\t2\\n", 9, 34)
+      iex> RustyCSV.Native.parse_string_zero_copy_with_config("a\\tb\\n1\\t2\\n", 9, 34, :default)
       [["a", "b"], ["1", "2"]]
 
       # TSV parsing with binary separator
-      iex> RustyCSV.Native.parse_string_zero_copy_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34)
+      iex> RustyCSV.Native.parse_string_zero_copy_with_config("a\\tb\\n1\\t2\\n", <<9>>, 34, :default)
       [["a", "b"], ["1", "2"]]
 
   """
@@ -675,6 +679,9 @@ defmodule RustyCSV.Native do
     * `separator` - Field separator (see "Separator Format" above)
     * `escape` - Escape character (see "Escape Format" above)
     * `line_separator` - Line separator binary or `:default` for `"\\n"`
+    * `formula` - `nil` or list of `{trigger_binary, replacement_binary}` tuples
+    * `encoding` - Target encoding (`:utf8`, `:latin1`, `{:utf16, :little | :big}`, `{:utf32, :little | :big}`)
+    * `reserved` - List of reserved pattern binaries that trigger quoting
 
   ## Examples
 
@@ -713,8 +720,7 @@ defmodule RustyCSV.Native do
   For typical/clean data where most fields pass through unquoted, prefer
   `encode_string/7` which avoids the input copy via term references.
 
-  Only supports single-byte separator/escape. Raises `ArgumentError` for
-  multi-byte configurations — use `encode_string/7` instead.
+  Supports both single-byte and multi-byte separator and escape sequences.
 
   ## Parameters
 
@@ -722,6 +728,9 @@ defmodule RustyCSV.Native do
     * `separator` - Field separator (see "Separator Format" above)
     * `escape` - Escape character (see "Escape Format" above)
     * `line_separator` - Line separator binary or `:default` for `"\\n"`
+    * `formula` - `nil` or list of `{trigger_binary, replacement_binary}` tuples
+    * `encoding` - Target encoding (`:utf8`, `:latin1`, `{:utf16, :little | :big}`, `{:utf32, :little | :big}`)
+    * `reserved` - List of reserved pattern binaries that trigger quoting
 
   ## Examples
 

@@ -31,11 +31,11 @@
    `git commit -m "Prepare vx.y.z"`
 5. Push to main: `git push origin main`
 6. Trigger NIF build: `gh workflow run release.yml --field version=x.y.z`
-7. **Wait for all 45 builds to complete**
+7. **Wait for all 60 builds to complete**
    ```bash
    gh run watch <run-id>
    ```
-8. Verify that the draft release has 45 assets, including 15 AVX2 variants:
+8. Verify that the draft release has 60 assets, including 20 AVX2 variants:
    ```bash
    gh release view vx.y.z --json assets --jq '.assets | length'
    gh release view vx.y.z --json assets --jq '[.assets[] | select(.name | contains("--avx2"))] | length'
@@ -52,9 +52,10 @@
 
 ## Important Notes
 
-- **Do not publish the draft release until all 45 jobs complete and attach their assets**
-- The 30 portable artifacts remain the default. The 15 x86-64-v3 artifacts use
-  the `--avx2` suffix and require explicit `RUSTYCSV_CPU=avx2` selection.
+- **Do not publish the draft release until all 60 jobs complete and attach their assets**
+- The 40 portable artifacts remain the default (across NIF versions 2.15 through
+  2.18). The 20 x86-64-v3 artifacts use the `--avx2` suffix and require explicit
+  `RUSTYCSV_CPU=avx2` selection.
 - The workflow creates a draft release - each job attaches its asset to this draft
 - Publishing too early causes a race condition where later jobs fail to attach their assets
 - Step 7 verifies all assets are present before proceeding
@@ -69,7 +70,7 @@ gh run list --workflow=release.yml
 gh run watch <run-id>
 
 # Check draft release assets
-gh release view vx.y.z --json assets --jq '.assets | length'  # Must be 45
+gh release view vx.y.z --json assets --jq '.assets | length'  # Must be 60
 gh release view vx.y.z --json assets --jq '.assets[].name'
 
 # If something goes wrong, delete and retry

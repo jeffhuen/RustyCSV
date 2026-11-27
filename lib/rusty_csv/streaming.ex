@@ -134,7 +134,6 @@ defmodule RustyCSV.Streaming do
   # ==========================================================================
 
   @default_chunk_size 64 * 1024
-  @min_buffer_size 64 * 1024
 
   # ==========================================================================
   # Public API
@@ -182,7 +181,10 @@ defmodule RustyCSV.Streaming do
   """
   @spec stream_file(Path.t(), stream_options()) :: Enumerable.t()
   def stream_file(path, opts \\ []) do
-    chunk_size = Keyword.get(opts, :chunk_size, @default_chunk_size)
+    chunk_size =
+      opts
+      |> Keyword.get(:chunk_size, @default_chunk_size)
+      |> validate_pos_integer!(:chunk_size)
 
     path
     |> File.stream!(chunk_size, [])
@@ -193,11 +195,15 @@ defmodule RustyCSV.Streaming do
   Create a stream from an enumerable (like `File.stream!/1`).
 
   This is used internally by `parse_stream/2` to handle line-oriented or
-  chunk-oriented input from any enumerable source.
+  chunk-oriented input from any enumerable source. Each enumeration allocates
+  its own native streaming parser, so the returned stream can be safely reused
+  or halted early.
 
   ## Options
 
-    * `:chunk_size` - Not used for enumerables (chunks come from source).
+    * `:chunk_size` - Target byte size for batching small chunks before feeding
+      the NIF and for optimizing line-mode `File.Stream` reads. Defaults to
+      `65536` (64 KB).
 
     * `:encoding` - Character encoding of input. Defaults to `:utf8`.
 
@@ -234,45 +240,46 @@ defmodule RustyCSV.Streaming do
     bom = Keyword.get(opts, :bom, "")
     trim_bom = Keyword.get(opts, :trim_bom, false)
 
+    chunk_size =
+      opts
+      |> Keyword.get(:chunk_size, @default_chunk_size)
+      |> validate_pos_integer!(:chunk_size)
+
+    validate_stream_opts!(opts)
+
     # Optimize File.Stream: switch line-mode to binary chunk mode to avoid
     # iterating 100K+ lines through Stream.transform (each line = 1 closure call).
-    # Binary chunks (~64KB each) reduce iterations from ~100K to ~100.
-    enumerable = optimize_file_stream(enumerable)
+    # Binary chunks reduce iterations from ~100K to ~100.
+    enumerable = optimize_file_stream(enumerable, chunk_size)
 
     # If encoding is not UTF-8, convert stream to UTF-8 first
     converted_enumerable =
       if encoding == :utf8 do
-        if trim_bom and bom != "" do
-          strip_bom_stream(enumerable, bom)
-        else
-          enumerable
-        end
+        maybe_strip_bom_stream(enumerable, trim_bom, bom)
       else
         enumerable
         |> maybe_strip_bom_stream(trim_bom, bom)
         |> convert_stream_to_utf8(encoding)
       end
 
-    parser = new_parser(separator, escape, newlines, opts)
-
     Stream.transform(
       converted_enumerable,
-      fn -> {[], 0} end,
-      fn chunk, {buf_chunks, buf_size} ->
-        chunk_binary = if is_binary(chunk), do: chunk, else: to_string(chunk)
+      fn -> {new_parser(separator, escape, newlines, opts), [], 0} end,
+      fn chunk, {parser, buf_chunks, buf_size} ->
+        chunk_binary = to_binary_chunk(chunk)
         new_buf_chunks = [chunk_binary | buf_chunks]
         new_buf_size = buf_size + byte_size(chunk_binary)
 
-        if new_buf_size >= @min_buffer_size do
+        if new_buf_size >= chunk_size do
           combined = new_buf_chunks |> Enum.reverse() |> IO.iodata_to_binary()
           {available, _buffer_size} = parse!(RustyCSV.Native.streaming_feed(parser, combined))
           rows = parse!(RustyCSV.Native.streaming_next_rows(parser, available))
-          {rows, {[], 0}}
+          {rows, {parser, [], 0}}
         else
-          {[], {new_buf_chunks, new_buf_size}}
+          {[], {parser, new_buf_chunks, new_buf_size}}
         end
       end,
-      fn {buf_chunks, _buf_size} ->
+      fn {parser, buf_chunks, _buf_size} ->
         unless buf_chunks == [] do
           combined = buf_chunks |> Enum.reverse() |> IO.iodata_to_binary()
           parse!(RustyCSV.Native.streaming_feed(parser, combined))
@@ -281,28 +288,59 @@ defmodule RustyCSV.Streaming do
         {available, _buffer_size, _has_partial} = RustyCSV.Native.streaming_status(parser)
         rows_from_buffer = parse!(RustyCSV.Native.streaming_next_rows(parser, available))
         final_rows = parse!(RustyCSV.Native.streaming_finalize(parser))
-        {rows_from_buffer ++ final_rows, {[], 0}}
+        {rows_from_buffer ++ final_rows, {:done, [], 0}}
+      end,
+      fn
+        {:done, _buf_chunks, _buf_size} ->
+          :ok
+
+        {parser, _buf_chunks, _buf_size} ->
+          _ = RustyCSV.Native.streaming_finalize(parser)
+          :ok
+      end
+    )
+  end
+
+  # Strip BOM from the start of a stream, buffering across small or empty leading chunks.
+  defp strip_bom_stream(enumerable, bom) do
+    bom_size = byte_size(bom)
+
+    Stream.transform(
+      enumerable,
+      fn -> {:pending, <<>>} end,
+      fn
+        chunk, :done ->
+          {[to_binary_chunk(chunk)], :done}
+
+        chunk, {:pending, acc} ->
+          strip_bom_pending(acc <> to_binary_chunk(chunk), bom, bom_size)
+      end,
+      fn
+        :done -> {[], :done}
+        {:pending, <<>>} -> {[], :done}
+        {:pending, acc} -> {[acc], :done}
       end,
       fn _acc -> :ok end
     )
   end
 
-  # Strip BOM from first chunk of stream if present
-  defp strip_bom_stream(enumerable, bom) do
-    bom_size = byte_size(bom)
+  defp strip_bom_pending(<<>>, _bom, _bom_size), do: {[], {:pending, <<>>}}
 
-    Stream.transform(enumerable, true, fn
-      chunk, true ->
-        # First chunk - check and strip BOM
-        if binary_part(chunk, 0, min(byte_size(chunk), bom_size)) == bom do
-          {[binary_part(chunk, bom_size, byte_size(chunk) - bom_size)], false}
-        else
-          {[chunk], false}
-        end
+  defp strip_bom_pending(combined, bom, bom_size) when byte_size(combined) < bom_size do
+    if binary_part(bom, 0, byte_size(combined)) == combined do
+      {[], {:pending, combined}}
+    else
+      {[combined], :done}
+    end
+  end
 
-      chunk, false ->
-        {[chunk], false}
-    end)
+  defp strip_bom_pending(combined, bom, bom_size) do
+    if binary_part(combined, 0, bom_size) == bom do
+      rest = binary_part(combined, bom_size, byte_size(combined) - bom_size)
+      if rest == <<>>, do: {[], :done}, else: {[rest], :done}
+    else
+      {[combined], :done}
+    end
   end
 
   defp maybe_strip_bom_stream(enumerable, true, bom) when bom != "",
@@ -316,7 +354,7 @@ defmodule RustyCSV.Streaming do
       stream,
       fn -> <<>> end,
       fn chunk, acc ->
-        input = acc <> chunk
+        input = acc <> to_binary_chunk(chunk)
 
         case :unicode.characters_to_binary(input, encoding, :utf8) do
           binary when is_binary(binary) ->
@@ -331,7 +369,9 @@ defmodule RustyCSV.Streaming do
             raise RustyCSV.ParseError,
               message:
                 "Invalid #{inspect(encoding)} sequence after #{byte_size(converted)} " <>
-                  "converted bytes (#{byte_size(rest)} bytes rejected)"
+                  "converted bytes (#{byte_size(rest)} bytes rejected)",
+              byte_offset: byte_size(converted),
+              reason: :invalid_encoding
         end
       end,
       fn
@@ -342,7 +382,8 @@ defmodule RustyCSV.Streaming do
           raise RustyCSV.ParseError,
             message:
               "Truncated #{inspect(encoding)} sequence at end of input " <>
-                "(#{byte_size(rest)} trailing bytes)"
+                "(#{byte_size(rest)} trailing bytes)",
+            reason: :truncated_encoding
       end,
       fn _acc -> :ok end
     )
@@ -377,7 +418,10 @@ defmodule RustyCSV.Streaming do
   """
   @spec stream_device(IO.device(), stream_options()) :: Enumerable.t()
   def stream_device(device, opts \\ []) do
-    chunk_size = Keyword.get(opts, :chunk_size, @default_chunk_size)
+    chunk_size =
+      opts
+      |> Keyword.get(:chunk_size, @default_chunk_size)
+      |> validate_pos_integer!(:chunk_size)
 
     device
     |> IO.binstream(chunk_size)
@@ -440,12 +484,29 @@ defmodule RustyCSV.Streaming do
   # Parser Creation (Private)
   # ==========================================================================
 
-  defp new_parser(separator, escape, newlines, opts) do
+  defp validate_stream_opts!(opts) do
     strict = Keyword.get(opts, :strict, true)
 
     unless is_boolean(strict) do
       raise ArgumentError, "invalid :strict option, expected a boolean, got: #{inspect(strict)}"
     end
+
+    case Keyword.fetch(opts, :max_buffer_size) do
+      {:ok, max} -> validate_pos_integer!(max, :max_buffer_size)
+      :error -> :ok
+    end
+  end
+
+  defp validate_pos_integer!(value, _name) when is_integer(value) and value > 0, do: value
+
+  defp validate_pos_integer!(value, name) do
+    raise ArgumentError,
+          "invalid :#{name} option, expected a positive integer, got: #{inspect(value)}"
+  end
+
+  defp new_parser(separator, escape, newlines, opts) do
+    validate_stream_opts!(opts)
+    strict = Keyword.get(opts, :strict, true)
 
     parser = RustyCSV.Native.streaming_new_with_config(separator, escape, newlines, strict)
 
@@ -462,12 +523,15 @@ defmodule RustyCSV.Streaming do
 
   defp parse!(result), do: RustyCSV.ParseError.unwrap!(result)
 
+  defp to_binary_chunk(chunk) when is_binary(chunk), do: chunk
+  defp to_binary_chunk(chunk), do: to_string(chunk)
+
   # Switch File.Stream from line mode to binary chunk mode.
   # Line mode emits ~100K elements for a typical CSV; binary chunk mode emits ~100.
   # This eliminates the dominant overhead: 100K Stream.transform closure calls.
-  defp optimize_file_stream(%File.Stream{line_or_bytes: :line} = stream) do
-    %{stream | line_or_bytes: @min_buffer_size}
+  defp optimize_file_stream(%File.Stream{line_or_bytes: :line} = stream, chunk_size) do
+    %{stream | line_or_bytes: chunk_size}
   end
 
-  defp optimize_file_stream(enumerable), do: enumerable
+  defp optimize_file_stream(enumerable, _chunk_size), do: enumerable
 end

@@ -3,7 +3,7 @@
 //! This allows the streaming parser state to persist across NIF calls.
 //! Supports both single-byte (fast path) and general (multi-byte) parsers.
 
-use crate::core::{Newlines, Violation};
+use crate::core::{LineCol, Newlines, Violation};
 use crate::strategy::{GeneralStreamingParser, GeneralStreamingParserNewlines, StreamingParser};
 use rustler::ResourceArc;
 use std::sync::Mutex;
@@ -64,19 +64,19 @@ impl StreamingParserEnum {
         }
     }
 
-    pub fn violation(&self) -> Option<Violation> {
+    pub fn violation_location(&self) -> Option<(Violation, LineCol)> {
         match self {
-            StreamingParserEnum::SingleByte(p) => p.violation(),
-            StreamingParserEnum::General(p) => p.violation(),
-            StreamingParserEnum::GeneralNewlines(p) => p.violation(),
+            StreamingParserEnum::SingleByte(p) => p.violation_location(),
+            StreamingParserEnum::General(p) => p.violation_location(),
+            StreamingParserEnum::GeneralNewlines(p) => p.violation_location(),
         }
     }
 
-    pub fn take_violation(&mut self) -> Option<Violation> {
+    pub fn take_violation_location(&mut self) -> Option<(Violation, LineCol)> {
         match self {
-            StreamingParserEnum::SingleByte(p) => p.take_violation(),
-            StreamingParserEnum::General(p) => p.take_violation(),
-            StreamingParserEnum::GeneralNewlines(p) => p.take_violation(),
+            StreamingParserEnum::SingleByte(p) => p.take_violation_location(),
+            StreamingParserEnum::General(p) => p.take_violation_location(),
+            StreamingParserEnum::GeneralNewlines(p) => p.take_violation_location(),
         }
     }
 

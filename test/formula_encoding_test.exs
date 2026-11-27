@@ -110,6 +110,8 @@ defmodule RustyCSV.FormulaEncodingTest do
     assert RFormulaMultiByte.parse_string(output, skip_headers: false) == [
              ["$=prefix=value$=", "plain::field"]
            ]
+
+    assert dump(RFormulaMultiByte, [["=value$=", "plain::field"]], strategy: :parallel) == output
   end
 
   test "parallel formula output is byte-identical to serial output" do

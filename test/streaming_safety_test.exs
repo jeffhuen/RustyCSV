@@ -96,6 +96,50 @@ defmodule RustyCSV.StreamingSafetyTest do
 
       assert result == [["1", "2"]]
     end
+
+    test "parse_stream rejects non-positive chunk_size and max_buffer_size eagerly" do
+      assert_raise ArgumentError, ~r/invalid :chunk_size/, fn ->
+        RustyCSV.RFC4180.parse_stream(["a,b\n"], chunk_size: 0)
+      end
+
+      assert_raise ArgumentError, ~r/invalid :max_buffer_size/, fn ->
+        RustyCSV.RFC4180.parse_stream(["a,b\n"], max_buffer_size: 0)
+      end
+    end
+  end
+
+  describe "stream reusability and early halt isolation" do
+    test "enumerating the same parse_stream twice produces identical rows" do
+      stream =
+        ["h1,h2\n", "a,1\n", "b,2\n", "c,3\n"]
+        |> RustyCSV.RFC4180.parse_stream(chunk_size: 8)
+
+      expected = [["a", "1"], ["b", "2"], ["c", "3"]]
+      assert Enum.to_list(stream) == expected
+      assert Enum.to_list(stream) == expected
+    end
+
+    test "early halt does not leak partial state into subsequent enumerations" do
+      stream =
+        ["h1,h2\n", "a,1\n", "b,\"multi", "\nline\"\n", "c,3\n"]
+        |> RustyCSV.RFC4180.parse_stream(chunk_size: 4)
+
+      assert Enum.take(stream, 1) == [["a", "1"]]
+      assert Enum.to_list(stream) == [["a", "1"], ["b", "multi\nline"], ["c", "3"]]
+    end
+
+    test "concurrent enumerations of the same stream do not interfere" do
+      chunks = ["h1,h2\n" | Enum.map(1..50, &"row#{&1},val#{&1}\n")]
+      stream = RustyCSV.RFC4180.parse_stream(chunks, chunk_size: 32)
+      expected = Enum.map(1..50, &["row#{&1}", "val#{&1}"])
+
+      results =
+        1..8
+        |> Enum.map(fn _ -> Task.async(fn -> Enum.to_list(stream) end) end)
+        |> Task.await_many(5_000)
+
+      assert Enum.all?(results, &(&1 == expected))
+    end
   end
 
   # ==========================================================================

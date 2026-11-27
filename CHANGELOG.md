@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-27
+
+Version 0.5.0 introduces no breaking changes to public Elixir function
+signatures, return shapes, default options, or strategy atoms. Read the
+[migration and upgrade guide](docs/MIGRATION.md) for upgrade steps and behavior
+notes.
+
+### Added
+
+- Add precompiled NIF 2.18 artifacts for Erlang/OTP 29. A release now publishes
+  60 artifacts: 40 portable builds and 20 opt-in AVX2 builds.
+- Add `:line`, `:column`, `:byte_offset`, and `:reason` fields to
+  `RustyCSV.ParseError`. Line and column are 1-based, `:byte_offset` is 0-based,
+  and `:reason` is one of `:unexpected_quote`, `:trailing_garbage`,
+  `:unterminated_quote`, `:invalid_encoding`, `:incomplete_encoding`, or
+  `:truncated_encoding`. Batch parsers compute line and column only when a
+  violation occurs, so valid CSV pays no runtime cost. Error messages still omit
+  raw CSV field contents.
+- Add multi-byte separator and escape support to parallel encoding in
+  `dump_to_iodata/2` with `strategy: :parallel`.
+
+### Fixed
+
+- Return `[]` instead of `[[""]]` on empty input in parallel multi-byte and
+  custom-newline parsers.
+- Allocate a fresh native parser per enumeration in `parse_stream/2` and
+  `RustyCSV.Streaming.stream_enumerable/2`, and finalize that parser when a
+  stream halts early. Reused streams, early halts, and concurrent enumerations
+  no longer share mutable parser state.
+- Apply `:chunk_size` in `parse_stream/2` and
+  `RustyCSV.Streaming.stream_enumerable/2` for both chunk batching and
+  `File.Stream` optimization.
+- Buffer leading empty and short chunks with `trim_bom: true` so streaming
+  parsers strip UTF-8, UTF-16, and UTF-32 BOMs split across chunks.
+- Wait across chunk boundaries in custom-newline streaming when a longer
+  newline with the same prefix can still match, such as `"||"` and `"|"`.
+  Finalization resolves any trailing newline at end of input without emitting
+  an extra empty row.
+- Validate options consistently with `ArgumentError` in `RustyCSV.define/2`,
+  `parse_string/2`, `parse_stream/2`, and `RustyCSV.Streaming`. Invalid values
+  now raise `ArgumentError`: empty `headers: []` in `parse_stream/2`, unknown
+  `:strategy` atoms, non-boolean `:skip_headers` or BOM flags, non-positive
+  `:chunk_size` or `:max_buffer_size`, empty `:newlines`, non-binary
+  `:line_separator`, and non-map `:escape_formula`.
+
+### Changed
+
+- Update `RustyCSV.ParseError` quoting messages to include line and column
+  positions. Messages now end with `"at line L, column C (byte N)"` instead of
+  `"at byte N"`.
+- Update internal `RustyCSV.Native` malformed-CSV error tuples from
+  `{:error, {:malformed_csv, reason, byte_offset}}` to
+  `{:error, {:malformed_csv, reason, byte_offset, line, column}}`.
+- Update `rustler_precompiled` to `~> 0.10.1`. Version 0.10.1 adds NIF 2.18
+  support and raises the `:httpc` header size limit for GitHub Releases
+  downloads.
+- Loosen the optional Mix `:rustler` constraint to `>= 0.0.0` so host
+  applications that use other Rustler NIFs avoid Hex version conflicts.
+- Update the Rust `rustler` crate to `0.39.0`, `philss/rustler-precompiled-action`
+  to `v1.1.5`, and Hex and Cargo dependencies including `dialyxir` 1.4.9,
+  `ex_doc` 0.40.5, `ex_slop` 0.4.5, and `makeup` 1.2.3.
+
+### Documentation
+
+- Add the [migration and upgrade guide](docs/MIGRATION.md).
+- Fix stale mimalloc, dirty-scheduler, and memory-model notes in `RustyCSV`,
+  `RustyCSV.Native`, and `docs/ARCHITECTURE.md`.
+- Fix wrong-arity examples in `RustyCSV.Native` doctests, update the
+  `RustyCSV.RFC4180` dump example to show `\r\n`, and update `RELEASE.md` for 60
+  release artifacts.
+
 ## [0.4.6] - 2026-08-28
 
 ### Added

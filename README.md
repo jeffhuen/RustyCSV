@@ -3,7 +3,7 @@
 **Ultra-fast CSV parsing and encoding for Elixir.** A purpose-built Rust NIF with SIMD acceleration, parallel parsing, and bounded-memory streaming. Drop-in replacement for NimbleCSV.
 
 [![Hex.pm](https://img.shields.io/hexpm/v/rusty_csv.svg)](https://hex.pm/packages/rusty_csv)
-[![Tests](https://img.shields.io/badge/tests-422%20ExUnit%20%2B%20128%20Rust-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-432%20ExUnit%20%2B%20134%20Rust-brightgreen.svg)]()
 [![RFC 4180](https://img.shields.io/badge/RFC%204180-compliant-blue.svg)]()
 
 ## Why RustyCSV?
@@ -41,7 +41,7 @@
 | **High-performance allocator** | Opt-in mimalloc | System |
 | **Drop-in replacement** | ✅ Same API | - |
 | **Headers-to-maps** | ✅ `headers: true` or explicit keys | ❌ |
-| **RFC 4180 compliant** | ✅ 422 ExUnit + 128 Rust tests | ✅ |
+| **RFC 4180 compliant** | ✅ 432 ExUnit + 134 Rust tests | ✅ |
 | **[Benchmark (7MB CSV)](https://rusty-csv.hexdocs.pm/benchmark.html#large-csv-6-82-mb-100k-rows)** | ~20ms | ~233ms |
 
 ## Purpose-Built for Elixir
@@ -93,7 +93,7 @@ File.stream!("huge.csv") |> CSV.parse_stream()   # Bounded memory
 
 ```elixir
 def deps do
-  [{:rusty_csv, "~> 0.4.6"}]
+  [{:rusty_csv, "~> 0.5.0"}]
 end
 ```
 
@@ -210,6 +210,8 @@ All NimbleCSV functions are supported:
 | `dump_to_stream/1` | Lazily convert rows to a stream of list-shaped row iodata |
 | `to_line_stream/1` | Convert arbitrary chunks to lines |
 | `options/0` | Return the original definition options |
+
+Read the [migration and upgrade guide](docs/MIGRATION.md) to upgrade from earlier RustyCSV releases or move from NimbleCSV.
 
 ## Benchmarks
 
@@ -398,7 +400,7 @@ RustyCSV is **fully RFC 4180 compliant** and validated against industry-standard
 | Streaming safety | ✅ All pass |
 | Concurrent access | ✅ All pass |
 | 0.4.1 parity regressions | ✅ All pass |
-| **ExUnit suite total** | **422, including 5 properties** |
+| **ExUnit suite total** | **432, including 5 properties** |
 
 See [Compliance and Validation](https://rusty-csv.hexdocs.pm/compliance.html) for full details.
 
@@ -644,7 +646,7 @@ mix deps.get
 # Compile (includes Rust NIF)
 mix compile
 
-# Run tests (422 ExUnit tests)
+# Run tests (432 ExUnit tests)
 mix test
 
 # Run benchmarks

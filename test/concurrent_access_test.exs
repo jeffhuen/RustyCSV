@@ -52,20 +52,18 @@ defmodule RustyCSV.ConcurrentAccessTest do
           end)
         end
 
-      # Consumer drains rows concurrently with producers
+      # Consumer drains rows concurrently with producers until signaled to stop
       consumer =
         Task.async(fn ->
-          drain_loop(parser, [], 200)
+          drain_until_stopped(parser, [])
         end)
 
       # Wait for all producers to finish
       Task.await_many(producers, 10_000)
 
-      # Give consumer a moment to catch up, then finalize
-      Process.sleep(50)
-      remaining = Native.streaming_next_rows(parser, 1000)
-
+      send(consumer.pid, :stop)
       consumed = Task.await(consumer, 5_000)
+      remaining = Native.streaming_next_rows(parser, 1000)
       total = length(consumed) + length(remaining)
 
       # 10 producers × 5 rows each = 50 total
@@ -97,11 +95,12 @@ defmodule RustyCSV.ConcurrentAccessTest do
 
       drainer =
         Task.async(fn ->
-          drain_loop(parser, [], 100)
+          drain_until_stopped(parser, [])
         end)
 
       Task.await(feeder, 5_000)
       Task.await(status_checker, 5_000)
+      send(drainer.pid, :stop)
       Task.await(drainer, 5_000)
 
       # No crash = success. The mutex ensures serialized access.
@@ -227,17 +226,17 @@ defmodule RustyCSV.ConcurrentAccessTest do
   # Helpers
   # ============================================================================
 
-  # Repeatedly drain rows from a parser until a timeout of empty drains
-  defp drain_loop(parser, acc, remaining_empty) when remaining_empty > 0 do
+  # Repeatedly drain rows from a parser until told to stop
+  defp drain_until_stopped(parser, acc) do
     rows = Native.streaming_next_rows(parser, 100)
+    acc = if rows == [], do: acc, else: acc ++ rows
 
-    if rows == [] do
-      Process.sleep(5)
-      drain_loop(parser, acc, remaining_empty - 1)
-    else
-      drain_loop(parser, acc ++ rows, remaining_empty)
+    receive do
+      :stop ->
+        acc ++ Native.streaming_next_rows(parser, 1000)
+    after
+      1 ->
+        drain_until_stopped(parser, acc)
     end
   end
-
-  defp drain_loop(_parser, acc, _), do: acc
 end

@@ -1,7 +1,7 @@
 defmodule RustyCSV.MixProject do
   use Mix.Project
 
-  @version "0.4.6"
+  @version "0.5.0"
   @source_url "https://github.com/jeffhuen/rustycsv"
 
   def project do
@@ -63,6 +63,7 @@ defmodule RustyCSV.MixProject do
       homepage_url: @source_url,
       extras: [
         "README.md": [title: "Overview"],
+        "docs/MIGRATION.md": [title: "Migration & Upgrade Guide"],
         "docs/ARCHITECTURE.md": [title: "Architecture"],
         "docs/BENCHMARK.md": [title: "Real-World Benchmarks"],
         "docs/COMPLIANCE.md": [title: "Compliance & Validation"],
@@ -93,13 +94,13 @@ defmodule RustyCSV.MixProject do
 
   defp deps do
     [
-      {:rustler, "~> 0.38.0", optional: true},
-      {:rustler_precompiled, "~> 0.9"},
-      {:nimble_csv, "~> 1.2", only: [:dev, :test]},
-      {:stream_data, "~> 1.3", only: [:dev, :test]},
-      {:benchee, "~> 1.0", only: :dev},
+      {:rustler, ">= 0.0.0", optional: true},
+      {:rustler_precompiled, "~> 0.10.1"},
+      {:nimble_csv, "~> 1.3", only: [:dev, :test]},
+      {:stream_data, "~> 1.4", only: [:dev, :test]},
+      {:benchee, "~> 1.5", only: :dev},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:ex_slop, "~> 0.4.2", only: :dev, runtime: false},
+      {:ex_slop, "~> 0.4.5", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]

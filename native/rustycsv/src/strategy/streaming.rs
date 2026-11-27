@@ -8,7 +8,10 @@
 //! - Buffers incomplete rows until more data arrives
 //! - Returns rows in batches to reduce NIF call overhead
 
-use crate::core::{extract_field_owned_with_escape, is_separator, QuoteState, Violation};
+use crate::core::{
+    count_default_newlines, extract_field_owned_with_escape, is_separator, line_col_at_default,
+    LineCol, QuoteState, Violation,
+};
 
 /// Default maximum buffer size for streaming parsers (256 MB).
 pub const DEFAULT_MAX_BUFFER: usize = 256 * 1024 * 1024;
@@ -55,8 +58,10 @@ pub struct StreamingParser {
     max_buffer_size: usize,
     /// Absolute offset represented by `buffer[0]` after compaction.
     buffer_offset: usize,
-    /// First malformed-quoting condition seen in stream order.
-    violation: Option<Violation>,
+    /// Number of newlines discarded by buffer compaction so far.
+    compacted_lines: usize,
+    /// First malformed-quoting condition seen in stream order, with 1-based line/column.
+    violation: Option<(Violation, LineCol)>,
 }
 
 impl StreamingParser {
@@ -77,6 +82,7 @@ impl StreamingParser {
             escape,
             max_buffer_size: DEFAULT_MAX_BUFFER,
             buffer_offset: 0,
+            compacted_lines: 0,
             violation: None,
         }
     }
@@ -93,6 +99,7 @@ impl StreamingParser {
             escape,
             max_buffer_size: DEFAULT_MAX_BUFFER,
             buffer_offset: 0,
+            compacted_lines: 0,
             violation: None,
         }
     }
@@ -175,7 +182,9 @@ impl StreamingParser {
             }
 
             if self.violation.is_none() {
-                self.violation = self.quote.violation();
+                if let Some(violation) = self.quote.violation() {
+                    self.record_violation(violation);
+                }
             }
         }
 
@@ -239,10 +248,27 @@ impl StreamingParser {
         (fields, quote.finish(line.len()))
     }
 
+    fn record_violation(&mut self, violation: Violation) {
+        if self.violation.is_some() {
+            return;
+        }
+        let rel_pos = violation.position().saturating_sub(self.buffer_offset);
+        let local = line_col_at_default(&self.buffer, rel_pos);
+        self.violation = Some((
+            violation,
+            LineCol {
+                line: self.compacted_lines + local.line,
+                column: local.column,
+            },
+        ));
+    }
+
     fn push_complete_row(&mut self, start: usize, end: usize) {
         let (row, violation) = self.parse_row_owned(start, end);
         if self.violation.is_none() {
-            self.violation = violation.map(|v| v.rebase(self.buffer_offset + start));
+            if let Some(violation) = violation {
+                self.record_violation(violation.rebase(self.buffer_offset + start));
+            }
         }
         self.complete_rows.push(row);
     }
@@ -250,6 +276,7 @@ impl StreamingParser {
     /// Compact buffer by removing already-processed data
     fn compact_buffer(&mut self) {
         if self.partial_row_start > 0 {
+            self.compacted_lines += count_default_newlines(&self.buffer[..self.partial_row_start]);
             self.buffer.drain(0..self.partial_row_start);
             self.buffer_offset += self.partial_row_start;
             // Adjust positions after compaction
@@ -292,10 +319,20 @@ impl StreamingParser {
     /// First strict quoting violation seen so far.
     #[must_use]
     pub fn violation(&self) -> Option<Violation> {
+        self.violation.map(|(v, _)| v)
+    }
+
+    /// First strict quoting violation seen so far, along with its 1-based line and column.
+    #[must_use]
+    pub fn violation_location(&self) -> Option<(Violation, LineCol)> {
         self.violation
     }
 
     pub fn take_violation(&mut self) -> Option<Violation> {
+        self.violation.take().map(|(v, _)| v)
+    }
+
+    pub fn take_violation_location(&mut self) -> Option<(Violation, LineCol)> {
         self.violation.take()
     }
 
@@ -310,6 +347,7 @@ impl StreamingParser {
         self.buffer = Vec::new();
         self.partial_row_start = 0;
         self.buffer_offset = 0;
+        self.compacted_lines = 0;
         self.scan_pos = 0;
         self.quote = QuoteState::new();
 
@@ -327,6 +365,7 @@ impl StreamingParser {
         self.scan_pos = 0;
         self.quote = QuoteState::new();
         self.buffer_offset = 0;
+        self.compacted_lines = 0;
         self.violation = None;
         // separator and escape are preserved
     }
@@ -473,7 +512,31 @@ mod tests {
         assert_eq!(parser.violation(), None);
 
         parser.finalize();
-        assert_eq!(parser.violation(), Some(Violation::UnterminatedQuote(6)));
+        assert_eq!(
+            parser.violation_location(),
+            Some((
+                Violation::UnterminatedQuote(6),
+                LineCol { line: 2, column: 3 }
+            ))
+        );
+    }
+
+    #[test]
+    fn violation_location_survives_compaction_and_multiline_quoted_fields() {
+        let mut parser = StreamingParser::new();
+        // Line 1: a,b\n ; Line 2-3: "line1\nline2"\n (3 newlines total, compacted)
+        parser.feed(b"a,b\n\"line1\nline2\"\n").unwrap();
+        assert_eq!(parser.buffer_size(), 0);
+
+        parser.feed("名前,x".as_bytes()).unwrap();
+        parser.feed(b"\"y\n").unwrap();
+        assert_eq!(
+            parser.violation_location(),
+            Some((
+                Violation::UnexpectedQuote(26),
+                LineCol { line: 4, column: 5 }
+            ))
+        );
     }
 
     // --- Memory management tests ---

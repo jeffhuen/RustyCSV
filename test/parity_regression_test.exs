@@ -111,17 +111,89 @@ defmodule RustyCSV.ParityRegressionTest do
            ]
   end
 
+  RustyCSV.define(OverlappingPipeNewline, newlines: ["||", "|"], line_separator: "|")
+  RustyCSV.define(MultiByteAll, separator: "::", escape: "$$", line_separator: "\n")
+
+  test "empty input returns [] across serial, parallel, and streaming for multi-byte and custom newlines" do
+    for mod <- [Plain, MixedSeparator, ParityPipeNewline, MultiByteAll] do
+      assert mod.parse_string("", skip_headers: false, strategy: :simd) == []
+      assert mod.parse_string("", skip_headers: false, strategy: :parallel) == []
+      assert mod.parse_stream([""], skip_headers: false) |> Enum.to_list() == []
+    end
+  end
+
+  test "overlapping custom newlines do not split across streaming chunks" do
+    assert OverlappingPipeNewline.parse_stream(["a|", "|b|"],
+             skip_headers: false,
+             chunk_size: 1
+           )
+           |> Enum.to_list() == [["a"], ["b"]]
+
+    assert OverlappingPipeNewline.parse_stream(["a|", "b|"],
+             skip_headers: false,
+             chunk_size: 1
+           )
+           |> Enum.to_list() == [["a"], ["b"]]
+
+    assert OverlappingPipeNewline.parse_stream(["a|"], skip_headers: false, chunk_size: 1)
+           |> Enum.to_list() == [["a"]]
+  end
+
+  test "parallel encoding supports multi-byte separators and escapes" do
+    rows = [["plain", "has::sep", "has$$esc"], ["1", "2", "3"]]
+
+    assert MultiByteAll.dump_to_iodata(rows, strategy: :parallel) ==
+             MultiByteAll.dump_to_iodata(rows)
+
+    dumped = MultiByteAll.dump_to_iodata(rows, strategy: :parallel) |> IO.iodata_to_binary()
+    assert MultiByteAll.parse_string(dumped, skip_headers: false) == rows
+  end
+
   test "a finalized native parser does not retain an old strict violation" do
     parser = RustyCSV.Native.streaming_new_with_config(",", "\"", :default, true)
 
     RustyCSV.Native.streaming_feed(parser, ~s("unterminated))
 
-    assert {:error, {:malformed_csv, :unterminated_quote, _position}} =
+    assert {:error, {:malformed_csv, :unterminated_quote, 13, 1, 14}} =
              RustyCSV.Native.streaming_finalize(parser)
 
     RustyCSV.Native.streaming_feed(parser, "a,b\n")
     assert RustyCSV.Native.streaming_next_rows(parser, 1) == [["a", "b"]]
     assert RustyCSV.Native.streaming_finalize(parser) == []
+  end
+
+  test "option validation rejects invalid strategy, skip_headers, headers, and define options" do
+    assert_raise ArgumentError, ~r/invalid :strategy/, fn ->
+      Plain.parse_string("a,b\n1,2\n", strategy: :unknown)
+    end
+
+    assert_raise ArgumentError, ~r/invalid :skip_headers/, fn ->
+      Plain.parse_string("a,b\n1,2\n", skip_headers: :yes)
+    end
+
+    assert_raise ArgumentError, ~r/invalid :skip_headers/, fn ->
+      ["a,b\n1,2\n"] |> Plain.parse_stream(skip_headers: :yes) |> Enum.to_list()
+    end
+
+    assert_raise ArgumentError, ~r/invalid :headers/, fn ->
+      Plain.parse_string("a,b\n1,2\n", headers: [])
+    end
+
+    assert_raise ArgumentError, ~r/invalid :headers/, fn ->
+      ["a,b\n1,2\n"] |> Plain.parse_stream(headers: []) |> Enum.to_list()
+    end
+
+    assert_raise ArgumentError, ~r/invalid :strategy/, fn ->
+      RustyCSV.define(RustyCSV.ParityRegressionTest.BadStrategy, strategy: :unknown)
+    end
+
+    assert_raise ArgumentError, ~r/:newlines/, fn ->
+      RustyCSV.define(RustyCSV.ParityRegressionTest.EmptyNewlines, newlines: [])
+    end
+
+    assert_raise ArgumentError, ~r/:escape_formula/, fn ->
+      RustyCSV.define(RustyCSV.ParityRegressionTest.BadFormula, escape_formula: "invalid")
+    end
   end
 
   defp assert_dump_matches(rusty, nimble, rows, opts \\ []) do

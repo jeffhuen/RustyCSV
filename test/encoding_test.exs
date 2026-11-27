@@ -319,11 +319,41 @@ defmodule RustyCSV.EncodingTest do
 
       truncated_digit = <<?2>>
 
-      assert_raise RustyCSV.ParseError, ~r/truncated.*utf16/i, fn ->
-        [valid_prefix, truncated_digit]
-        |> TestUTF16LE.parse_stream(skip_headers: false)
-        |> Enum.to_list()
-      end
+      error =
+        assert_raise RustyCSV.ParseError, ~r/truncated.*utf16/i, fn ->
+          [valid_prefix, truncated_digit]
+          |> TestUTF16LE.parse_stream(skip_headers: false)
+          |> Enum.to_list()
+        end
+
+      assert error.reason == :truncated_encoding
+    end
+
+    test "strips UTF-8, UTF-16, and UTF-32 BOMs split across small or empty leading chunks" do
+      assert [<<>>, <<0xEF>>, <<0xBB>>, <<0xBF>>, "a,b\n1,2\n"]
+             |> TestUTF8WithBOM.parse_stream(skip_headers: false)
+             |> Enum.to_list() == [["a", "b"], ["1", "2"]]
+
+      utf16_body = :unicode.characters_to_binary("a,b\n1,2\n", :utf8, {:utf16, :little})
+
+      assert [<<>>, <<0xFF>>, <<0xFE>>, utf16_body]
+             |> TestUTF16LE.parse_stream(skip_headers: false)
+             |> Enum.to_list() == [["a", "b"], ["1", "2"]]
+
+      utf32_body = :unicode.characters_to_binary("a,b\n1,2\n", :utf8, {:utf32, :little})
+
+      assert [<<0xFF, 0xFE>>, <<0x00, 0x00>>, utf32_body]
+             |> TestUTF32LE.parse_stream(skip_headers: false)
+             |> Enum.to_list() == [["a", "b"], ["1", "2"]]
+
+      # BOM-only stream and short non-BOM stream
+      assert [<<0xEF>>, <<0xBB, 0xBF>>]
+             |> TestUTF8WithBOM.parse_stream(skip_headers: false)
+             |> Enum.to_list() == []
+
+      assert [<<0xEF>>]
+             |> TestUTF8WithBOM.parse_stream(skip_headers: false)
+             |> Enum.to_list() == [[<<0xEF>>]]
     end
   end
 
@@ -338,9 +368,13 @@ defmodule RustyCSV.EncodingTest do
       # Invalid UTF-16 sequence (incomplete surrogate pair)
       invalid_data = <<0xFF, 0xFE, 0x00, 0xD8>>
 
-      assert_raise RustyCSV.ParseError, ~r/Incomplete|Invalid/, fn ->
-        TestUTF16LE.parse_string(invalid_data)
-      end
+      error =
+        assert_raise RustyCSV.ParseError, ~r/Incomplete|Invalid/, fn ->
+          TestUTF16LE.parse_string(invalid_data)
+        end
+
+      assert error.reason in [:incomplete_encoding, :invalid_encoding]
+      assert error.byte_offset == 0
     end
   end
 

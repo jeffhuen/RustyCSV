@@ -1,6 +1,6 @@
 # RustyCSV Compliance & Validation
 
-RustyCSV takes correctness seriously. With **422 ExUnit tests** plus **128 Rust
+RustyCSV takes correctness seriously. With **432 ExUnit tests** plus **134 Rust
 tests**, including industry-standard validation suites used by CSV parsers
 across multiple languages, RustyCSV is one of the most thoroughly tested CSV
 libraries available for Elixir.
@@ -233,10 +233,10 @@ RustyCSV intentionally does not. CSV may contain credentials, personal data, or
 very large fields, and exceptions are commonly forwarded to logs and error
 trackers.
 
-RustyCSV errors therefore contain a stable category and byte position, never
-field contents. Synthetic CSV content may appear in tests, but real user
-fixtures must be scrubbed. This is an intentional security difference, not an
-unfinished parity item.
+RustyCSV errors therefore contain a stable category (`:reason`), 1-based `:line`
+and `:column`, and 0-based `:byte_offset`, never field contents. Synthetic CSV
+content may appear in tests, but real user fixtures must be scrubbed. This is an
+intentional security difference, not an unfinished parity item.
 
 Temporarily changing production errors to include raw CSV would test behavior
 that will not ship and risks committing a data leak. Future parity checks should
@@ -313,9 +313,9 @@ test/fixtures/
 
 | Gate | Result |
 |------|--------|
-| Rust unit tests | 117 passed |
+| Rust unit tests | 123 passed |
 | Rust conformance tests | 11 passed |
-| ExUnit | 422 passed, including 5 properties |
+| ExUnit | 432 passed, including 5 properties |
 | NimbleCSV v1.3.0 semantic suite | 20/21; formula bytes intentionally differ |
 | NimbleCSV master semantic suite | 21/23; formula bytes intentionally differ |
 | `cargo clippy -D warnings` | Passed |

@@ -10,7 +10,10 @@
 use std::borrow::Cow;
 
 use super::streaming::shrink_excess;
-use crate::core::newlines::{match_newline, Newlines};
+use crate::core::newlines::{
+    count_default_newlines, count_newlines, line_col_at, line_col_at_default, match_newline,
+    LineCol, Newlines,
+};
 use crate::core::{InputTooLarge, QuoteState, ScannedBoundaries, Violation};
 
 // ============================================================================
@@ -46,6 +49,19 @@ fn has_partial_separator_suffix(data: &[u8], pos: usize, separators: &[Vec<u8>])
     separators
         .iter()
         .any(|separator| suffix.len() < separator.len() && separator.starts_with(suffix))
+}
+
+#[inline]
+fn has_longer_partial_newline_suffix(
+    data: &[u8],
+    pos: usize,
+    newlines: &Newlines,
+    matched_len: usize,
+) -> bool {
+    let suffix = &data[pos..];
+    newlines.patterns.iter().any(|pattern| {
+        pattern.len() > matched_len && suffix.len() < pattern.len() && pattern.starts_with(suffix)
+    })
 }
 
 /// Consume one escape sequence and, inside quotes, a doubled escape sequence.
@@ -343,6 +359,10 @@ fn find_row_starts_general_inner(
     escape: &[u8],
     check_newline: impl Fn(&[u8], usize) -> usize,
 ) -> Vec<usize> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+
     let mut starts = Vec::with_capacity(input.len() / 50 + 1);
     starts.push(0);
     let mut pos = 0;
@@ -378,6 +398,57 @@ fn find_row_starts_general_inner(
     }
 
     starts
+}
+
+/// Core row-range finder returning `(row_start, content_end)` for every row,
+/// excluding each row's matched newline terminator.
+fn find_row_ranges_general_inner(
+    input: &[u8],
+    escape: &[u8],
+    check_newline: impl Fn(&[u8], usize) -> usize,
+) -> Vec<(usize, usize)> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::with_capacity(input.len() / 50 + 1);
+    let mut row_start = 0;
+    let mut pos = 0;
+    let mut in_quotes = false;
+    let esc_len = escape.len();
+
+    while pos < input.len() {
+        if in_quotes {
+            if starts_with_escape(input, pos, escape) {
+                if starts_with_escape(input, pos + esc_len, escape) {
+                    pos += 2 * esc_len;
+                    continue;
+                }
+                in_quotes = false;
+                pos += esc_len;
+            } else {
+                pos += 1;
+            }
+        } else if starts_with_escape(input, pos, escape) {
+            in_quotes = true;
+            pos += esc_len;
+        } else {
+            let nl_len = check_newline(input, pos);
+            if nl_len > 0 {
+                ranges.push((row_start, pos));
+                pos += nl_len;
+                row_start = pos;
+            } else {
+                pos += 1;
+            }
+        }
+    }
+
+    if row_start < input.len() {
+        ranges.push((row_start, input.len()));
+    }
+
+    ranges
 }
 
 /// Default newline check: \n (len 1) or \r\n (len 2). Bare \r is data per RFC 4180.
@@ -439,21 +510,11 @@ pub fn parse_csv_parallel_general(
     use super::parallel::run_parallel;
     use rayon::prelude::*;
 
-    let row_starts = find_row_starts_general(input, escape);
+    let row_ranges = find_row_ranges_general_inner(input, escape, default_newline_len);
 
-    if row_starts.is_empty() {
+    if row_ranges.is_empty() {
         return Vec::new();
     }
-
-    let &last_start = match row_starts.last() {
-        Some(v) => v,
-        None => return Vec::new(),
-    };
-    let row_ranges: Vec<(usize, usize)> = row_starts
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .chain(std::iter::once((last_start, input.len())))
-        .collect();
 
     let separators_vec: Vec<Vec<u8>> = separators.to_vec();
     let escape_vec: Vec<u8> = escape.to_vec();
@@ -461,16 +522,7 @@ pub fn parse_csv_parallel_general(
     run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .map(|(start, end)| {
-                // Strip trailing line ending (\n or \r\n). Bare \r is data per RFC 4180.
-                let mut line_end = end;
-                if line_end > start && input[line_end - 1] == b'\n' {
-                    line_end -= 1;
-                    if line_end > start && input[line_end - 1] == b'\r' {
-                        line_end -= 1;
-                    }
-                }
-
+            .map(|(start, line_end)| {
                 let line = &input[start..line_end];
                 let (fields, _) =
                     parse_line_fields_owned_general(line, &separators_vec, &escape_vec);
@@ -530,12 +582,7 @@ fn parse_row_boundaries_general(
             field_start = pos;
             quote.on_delimiter();
         } else if input[pos] == b'\n' {
-            let field_end = if pos > field_start && input[pos - 1] == b'\r' {
-                pos - 1
-            } else {
-                pos
-            };
-            boundaries.push((field_start, field_end));
+            boundaries.push((field_start, pos));
             quote.on_delimiter();
             return (boundaries, pos + 1, quote.finish(pos + 1));
         } else if input[pos] == b'\r' && pos + 1 < input.len() && input[pos + 1] == b'\n' {
@@ -573,7 +620,8 @@ pub struct GeneralStreamingParser {
     escape: Vec<u8>,
     max_buffer_size: usize,
     buffer_offset: usize,
-    violation: Option<Violation>,
+    compacted_lines: usize,
+    violation: Option<(Violation, LineCol)>,
 }
 
 impl GeneralStreamingParser {
@@ -589,6 +637,7 @@ impl GeneralStreamingParser {
             escape,
             max_buffer_size: DEFAULT_MAX_BUFFER,
             buffer_offset: 0,
+            compacted_lines: 0,
             violation: None,
         }
     }
@@ -663,7 +712,9 @@ impl GeneralStreamingParser {
             }
 
             if self.violation.is_none() {
-                self.violation = self.quote.violation();
+                if let Some(violation) = self.quote.violation() {
+                    self.record_violation(violation);
+                }
             }
         }
 
@@ -674,6 +725,21 @@ impl GeneralStreamingParser {
         }
     }
 
+    fn record_violation(&mut self, violation: Violation) {
+        if self.violation.is_some() {
+            return;
+        }
+        let rel_pos = violation.position().saturating_sub(self.buffer_offset);
+        let local = line_col_at_default(&self.buffer, rel_pos);
+        self.violation = Some((
+            violation,
+            LineCol {
+                line: self.compacted_lines + local.line,
+                column: local.column,
+            },
+        ));
+    }
+
     fn parse_row_owned(&self, start: usize, end: usize) -> (Vec<Vec<u8>>, Option<Violation>) {
         let line = &self.buffer[start..end];
         parse_line_fields_owned_general(line, &self.separators, &self.escape)
@@ -682,13 +748,16 @@ impl GeneralStreamingParser {
     fn push_complete_row(&mut self, start: usize, end: usize) {
         let (row, violation) = self.parse_row_owned(start, end);
         if self.violation.is_none() {
-            self.violation = violation.map(|v| v.rebase(self.buffer_offset + start));
+            if let Some(violation) = violation {
+                self.record_violation(violation.rebase(self.buffer_offset + start));
+            }
         }
         self.complete_rows.push(row);
     }
 
     fn compact_buffer(&mut self) {
         if self.partial_row_start > 0 {
+            self.compacted_lines += count_default_newlines(&self.buffer[..self.partial_row_start]);
             self.buffer.drain(0..self.partial_row_start);
             self.buffer_offset += self.partial_row_start;
             self.scan_pos -= self.partial_row_start;
@@ -721,10 +790,19 @@ impl GeneralStreamingParser {
 
     #[must_use]
     pub fn violation(&self) -> Option<Violation> {
+        self.violation.map(|(v, _)| v)
+    }
+
+    #[must_use]
+    pub fn violation_location(&self) -> Option<(Violation, LineCol)> {
         self.violation
     }
 
     pub fn take_violation(&mut self) -> Option<Violation> {
+        self.violation.take().map(|(v, _)| v)
+    }
+
+    pub fn take_violation_location(&mut self) -> Option<(Violation, LineCol)> {
         self.violation.take()
     }
 
@@ -737,6 +815,7 @@ impl GeneralStreamingParser {
         self.partial_row_start = 0;
         self.scan_pos = 0;
         self.buffer_offset = 0;
+        self.compacted_lines = 0;
         self.quote = QuoteState::new();
         std::mem::take(&mut self.complete_rows)
     }
@@ -940,41 +1019,21 @@ pub fn parse_csv_parallel_general_with_newlines(
     use super::parallel::run_parallel;
     use rayon::prelude::*;
 
-    let row_starts = find_row_starts_general_with_newlines(input, escape, newlines);
+    let row_ranges = find_row_ranges_general_inner(input, escape, |input, pos| {
+        match_newline(input, pos, newlines)
+    });
 
-    if row_starts.is_empty() {
+    if row_ranges.is_empty() {
         return Vec::new();
     }
 
-    let &last_start = match row_starts.last() {
-        Some(v) => v,
-        None => return Vec::new(),
-    };
-    let row_ranges: Vec<(usize, usize)> = row_starts
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .chain(std::iter::once((last_start, input.len())))
-        .collect();
-
     let separators_vec: Vec<Vec<u8>> = separators.to_vec();
     let escape_vec: Vec<u8> = escape.to_vec();
-    let newlines_clone = newlines.clone();
 
     run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .map(|(start, end)| {
-                // Strip trailing newline pattern
-                let mut line_end = end;
-                for pattern in newlines_clone.patterns.iter() {
-                    if line_end >= start + pattern.len()
-                        && &input[line_end - pattern.len()..line_end] == pattern.as_slice()
-                    {
-                        line_end -= pattern.len();
-                        break;
-                    }
-                }
-
+            .map(|(start, line_end)| {
                 let line = &input[start..line_end];
                 let (fields, _) =
                     parse_line_fields_owned_general(line, &separators_vec, &escape_vec);
@@ -1034,21 +1093,11 @@ pub fn parse_csv_parallel_boundaries_general(
     use rayon::prelude::*;
 
     InputTooLarge::check(input)?;
-    let row_starts = find_row_starts_general(input, escape);
+    let row_ranges = find_row_ranges_general_inner(input, escape, default_newline_len);
 
-    if row_starts.is_empty() {
+    if row_ranges.is_empty() {
         return Ok(ScannedBoundaries::well_formed(Vec::new()));
     }
-
-    let &last_start = match row_starts.last() {
-        Some(v) => v,
-        None => return Ok(ScannedBoundaries::well_formed(Vec::new())),
-    };
-    let row_ranges: Vec<(usize, usize)> = row_starts
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .chain(std::iter::once((last_start, input.len())))
-        .collect();
 
     let separators_vec: Vec<Vec<u8>> = separators.to_vec();
     let escape_vec: Vec<u8> = escape.to_vec();
@@ -1056,16 +1105,7 @@ pub fn parse_csv_parallel_boundaries_general(
     let parsed: Vec<ParsedBoundaryRow> = run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .map(|(start, end)| {
-                // Strip trailing line ending (\n or \r\n). Bare \r is data per RFC 4180.
-                let mut line_end = end;
-                if line_end > start && input[line_end - 1] == b'\n' {
-                    line_end -= 1;
-                    if line_end > start && input[line_end - 1] == b'\r' {
-                        line_end -= 1;
-                    }
-                }
-
+            .map(|(start, line_end)| {
                 let line = &input[start..line_end];
                 let (line_boundaries, violation) =
                     parse_line_boundaries_general(line, &separators_vec, &escape_vec);
@@ -1102,41 +1142,21 @@ pub fn parse_csv_parallel_boundaries_general_with_newlines(
     use rayon::prelude::*;
 
     InputTooLarge::check(input)?;
-    let row_starts = find_row_starts_general_with_newlines(input, escape, newlines);
+    let row_ranges = find_row_ranges_general_inner(input, escape, |input, pos| {
+        match_newline(input, pos, newlines)
+    });
 
-    if row_starts.is_empty() {
+    if row_ranges.is_empty() {
         return Ok(ScannedBoundaries::well_formed(Vec::new()));
     }
 
-    let &last_start = match row_starts.last() {
-        Some(v) => v,
-        None => return Ok(ScannedBoundaries::well_formed(Vec::new())),
-    };
-    let row_ranges: Vec<(usize, usize)> = row_starts
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .chain(std::iter::once((last_start, input.len())))
-        .collect();
-
     let separators_vec: Vec<Vec<u8>> = separators.to_vec();
     let escape_vec: Vec<u8> = escape.to_vec();
-    let newlines_clone = newlines.clone();
 
     let parsed: Vec<ParsedBoundaryRow> = run_parallel(|| {
         row_ranges
             .into_par_iter()
-            .map(|(start, end)| {
-                // Strip trailing newline pattern
-                let mut line_end = end;
-                for pattern in newlines_clone.patterns.iter() {
-                    if line_end >= start + pattern.len()
-                        && &input[line_end - pattern.len()..line_end] == pattern.as_slice()
-                    {
-                        line_end -= pattern.len();
-                        break;
-                    }
-                }
-
+            .map(|(start, line_end)| {
                 let line = &input[start..line_end];
                 let (line_boundaries, violation) =
                     parse_line_boundaries_general(line, &separators_vec, &escape_vec);
@@ -1243,7 +1263,8 @@ pub struct GeneralStreamingParserNewlines {
     newlines: Newlines,
     max_buffer_size: usize,
     buffer_offset: usize,
-    violation: Option<Violation>,
+    compacted_lines: usize,
+    violation: Option<(Violation, LineCol)>,
 }
 
 impl GeneralStreamingParserNewlines {
@@ -1260,6 +1281,7 @@ impl GeneralStreamingParserNewlines {
             newlines,
             max_buffer_size: DEFAULT_MAX_BUFFER,
             buffer_offset: 0,
+            compacted_lines: 0,
             violation: None,
         }
     }
@@ -1269,7 +1291,7 @@ impl GeneralStreamingParserNewlines {
             return Err(super::streaming::BufferOverflow);
         }
         self.buffer.extend_from_slice(chunk);
-        self.process_buffer();
+        self.process_buffer(false);
         Ok(())
     }
 
@@ -1277,20 +1299,20 @@ impl GeneralStreamingParserNewlines {
         self.max_buffer_size = max;
     }
 
-    fn process_buffer(&mut self) {
+    fn process_buffer(&mut self, eof: bool) {
         let mut pos = self.scan_pos;
         let esc_len = self.escape.len();
-        let max_nl_len = self.newlines.max_pattern_len();
 
         while pos < self.buffer.len() {
-            if has_partial_escape_suffix(&self.buffer, pos, &self.escape) {
+            if !eof && has_partial_escape_suffix(&self.buffer, pos, &self.escape) {
                 break;
             }
             let absolute_pos = self.buffer_offset + pos;
             if self.quote.in_quotes() {
                 if starts_with_escape(&self.buffer, pos, &self.escape) {
                     let doubled = starts_with_escape(&self.buffer, pos + esc_len, &self.escape);
-                    if !doubled
+                    if !eof
+                        && !doubled
                         && has_partial_escape_suffix(&self.buffer, pos + esc_len, &self.escape)
                     {
                         break;
@@ -1303,49 +1325,58 @@ impl GeneralStreamingParserNewlines {
             } else if starts_with_escape(&self.buffer, pos, &self.escape) {
                 self.quote.on_escape(absolute_pos, false);
                 pos += esc_len;
-            } else if has_partial_separator_suffix(&self.buffer, pos, &self.separators) {
+            } else if !eof && has_partial_separator_suffix(&self.buffer, pos, &self.separators) {
                 break;
             } else if let Some(sep_len) = matches_separator(&self.buffer, pos, &self.separators) {
                 self.quote.on_delimiter();
                 pos += sep_len;
             } else {
-                // Chunk-boundary safety: if we can't fully check the longest newline
-                // pattern, break and wait for more data.
-                if pos + max_nl_len > self.buffer.len() {
-                    // Check shorter patterns that do fit
-                    let nl_len = match_newline(&self.buffer, pos, &self.newlines);
-                    if nl_len > 0 {
-                        self.quote.on_delimiter();
-                        self.push_complete_row(self.partial_row_start, pos);
-                        pos += nl_len;
-                        self.partial_row_start = pos;
-                    } else {
-                        break;
-                    }
+                let nl_len = match_newline(&self.buffer, pos, &self.newlines);
+                // Chunk-boundary safety: wait for more bytes if a longer newline pattern
+                // could still match at this position (e.g. "|" vs "||").
+                if !eof
+                    && has_longer_partial_newline_suffix(&self.buffer, pos, &self.newlines, nl_len)
+                {
+                    break;
+                }
+                if nl_len > 0 {
+                    self.quote.on_delimiter();
+                    self.push_complete_row(self.partial_row_start, pos);
+                    pos += nl_len;
+                    self.partial_row_start = pos;
                 } else {
-                    let nl_len = match_newline(&self.buffer, pos, &self.newlines);
-                    if nl_len > 0 {
-                        self.quote.on_delimiter();
-                        self.push_complete_row(self.partial_row_start, pos);
-                        pos += nl_len;
-                        self.partial_row_start = pos;
-                    } else {
-                        self.quote.on_data(absolute_pos);
-                        pos += 1;
-                    }
+                    self.quote.on_data(absolute_pos);
+                    pos += 1;
                 }
             }
 
             if self.violation.is_none() {
-                self.violation = self.quote.violation();
+                if let Some(violation) = self.quote.violation() {
+                    self.record_violation(violation);
+                }
             }
         }
 
         self.scan_pos = pos;
 
-        if self.partial_row_start > 0 && self.partial_row_start >= self.buffer.len() / 2 {
+        if !eof && self.partial_row_start > 0 && self.partial_row_start >= self.buffer.len() / 2 {
             self.compact_buffer();
         }
+    }
+
+    fn record_violation(&mut self, violation: Violation) {
+        if self.violation.is_some() {
+            return;
+        }
+        let rel_pos = violation.position().saturating_sub(self.buffer_offset);
+        let local = line_col_at(&self.buffer, rel_pos, &self.newlines);
+        self.violation = Some((
+            violation,
+            LineCol {
+                line: self.compacted_lines + local.line,
+                column: local.column,
+            },
+        ));
     }
 
     fn parse_row_owned(&self, start: usize, end: usize) -> (Vec<Vec<u8>>, Option<Violation>) {
@@ -1356,13 +1387,17 @@ impl GeneralStreamingParserNewlines {
     fn push_complete_row(&mut self, start: usize, end: usize) {
         let (row, violation) = self.parse_row_owned(start, end);
         if self.violation.is_none() {
-            self.violation = violation.map(|v| v.rebase(self.buffer_offset + start));
+            if let Some(violation) = violation {
+                self.record_violation(violation.rebase(self.buffer_offset + start));
+            }
         }
         self.complete_rows.push(row);
     }
 
     fn compact_buffer(&mut self) {
         if self.partial_row_start > 0 {
+            self.compacted_lines +=
+                count_newlines(&self.buffer[..self.partial_row_start], &self.newlines);
             self.buffer.drain(0..self.partial_row_start);
             self.buffer_offset += self.partial_row_start;
             self.scan_pos -= self.partial_row_start;
@@ -1395,14 +1430,24 @@ impl GeneralStreamingParserNewlines {
 
     #[must_use]
     pub fn violation(&self) -> Option<Violation> {
+        self.violation.map(|(v, _)| v)
+    }
+
+    #[must_use]
+    pub fn violation_location(&self) -> Option<(Violation, LineCol)> {
         self.violation
     }
 
     pub fn take_violation(&mut self) -> Option<Violation> {
+        self.violation.take().map(|(v, _)| v)
+    }
+
+    pub fn take_violation_location(&mut self) -> Option<(Violation, LineCol)> {
         self.violation.take()
     }
 
     pub fn finalize(&mut self) -> Vec<Vec<Vec<u8>>> {
+        self.process_buffer(true);
         if self.partial_row_start < self.buffer.len() {
             self.push_complete_row(self.partial_row_start, self.buffer.len());
         }
@@ -1411,6 +1456,7 @@ impl GeneralStreamingParserNewlines {
         self.partial_row_start = 0;
         self.scan_pos = 0;
         self.buffer_offset = 0;
+        self.compacted_lines = 0;
         self.quote = QuoteState::new();
         std::mem::take(&mut self.complete_rows)
     }
@@ -1595,6 +1641,77 @@ mod tests {
             parse_csv_boundaries_general_with_newlines(b"\"x\"junk,2|", &seps, &quoted, &newlines)
                 .expect("test input fits the structural index");
         assert_eq!(trailing.violation, Some(Violation::TrailingGarbage(3)));
+    }
+
+    #[test]
+    fn parallel_general_empty_input_returns_no_rows() {
+        let seps = vec![b"::".to_vec()];
+        let esc = b"$$".to_vec();
+        let nl = Newlines::custom(vec![b"|".to_vec()]);
+
+        assert!(find_row_starts_general(b"", &esc).is_empty());
+        assert!(find_row_starts_general_with_newlines(b"", &esc, &nl).is_empty());
+        assert!(parse_csv_parallel_general(b"", &seps, &esc).is_empty());
+        assert!(parse_csv_parallel_general_with_newlines(b"", &seps, &esc, &nl).is_empty());
+        assert!(parse_csv_parallel_boundaries_general(b"", &seps, &esc)
+            .expect("empty fits")
+            .rows
+            .is_empty());
+        assert!(
+            parse_csv_parallel_boundaries_general_with_newlines(b"", &seps, &esc, &nl)
+                .expect("empty fits")
+                .rows
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn overlapping_custom_newlines_do_not_split_across_streaming_chunks() {
+        let nl = Newlines::custom(vec![b"|".to_vec(), b"||".to_vec()]);
+        let seps = vec![b",".to_vec()];
+        let esc = b"\"".to_vec();
+
+        // "a||b|" split inside "||" must not emit a spurious empty row.
+        let mut parser = GeneralStreamingParserNewlines::new(seps.clone(), esc.clone(), nl.clone());
+        parser.feed(b"a|").unwrap();
+        assert_eq!(parser.available_rows(), 0);
+        parser.feed(b"|b|").unwrap();
+        let mut rows = parser.take_rows(10);
+        rows.extend(parser.finalize());
+        assert_eq!(rows, vec![vec![b"a".to_vec()], vec![b"b".to_vec()]]);
+
+        // Trailing single "|" at EOF resolves cleanly on finalize.
+        let mut parser = GeneralStreamingParserNewlines::new(seps.clone(), esc.clone(), nl.clone());
+        parser.feed(b"a|").unwrap();
+        let rows = parser.finalize();
+        assert_eq!(rows, vec![vec![b"a".to_vec()]]);
+
+        // Single "|" followed by data emits two rows.
+        let mut parser = GeneralStreamingParserNewlines::new(seps, esc, nl);
+        parser.feed(b"a|").unwrap();
+        parser.feed(b"b|").unwrap();
+        let mut rows = parser.take_rows(10);
+        rows.extend(parser.finalize());
+        assert_eq!(rows, vec![vec![b"a".to_vec()], vec![b"b".to_vec()]]);
+    }
+
+    #[test]
+    fn general_streaming_newlines_reports_line_and_column_after_compaction() {
+        let nl = Newlines::custom(vec![b"<br>".to_vec()]);
+        let seps = vec![b"::".to_vec()];
+        let esc = b"\"".to_vec();
+
+        let mut parser = GeneralStreamingParserNewlines::new(seps, esc, nl);
+        parser.feed(b"a::b<br>c::d<br>").unwrap();
+        assert_eq!(parser.buffer_size(), 0);
+        parser.feed(b"x\"y::2<br>").unwrap();
+        assert_eq!(
+            parser.violation_location(),
+            Some((
+                Violation::UnexpectedQuote(17),
+                LineCol { line: 3, column: 2 }
+            ))
+        );
     }
 
     #[test]
