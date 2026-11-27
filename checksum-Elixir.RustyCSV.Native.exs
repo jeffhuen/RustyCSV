@@ -1,92 +1,62 @@
 %{
-  "librustycsv-v0.4.6-nif-2.15-aarch64-apple-darwin.so.tar.gz" =>
-    "sha256:9ed73c3c73f89d98e054e5b1bf8f7802ef510d904b5efd81fdf0746cb9e8e4d4",
-  "librustycsv-v0.4.6-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:b723f4ce38154989ac947408d1c1672134a93e704de94ccac96494453d6bbe1b",
-  "librustycsv-v0.4.6-nif-2.15-aarch64-unknown-linux-musl.so.tar.gz" =>
-    "sha256:14feac25d63da27a40e67999634b66e1229f38396e9a934e43d4bb647ee014c0",
-  "librustycsv-v0.4.6-nif-2.15-arm-unknown-linux-gnueabihf.so.tar.gz" =>
-    "sha256:5f95f69d3cb30b404550de6507754e52ffe22970add14975c87fc55d129d8cb1",
-  "librustycsv-v0.4.6-nif-2.15-riscv64gc-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:f7337aa6423beec55571d50d4576cdfd4e04036cd0722c106b7e093df39cee67",
-  "librustycsv-v0.4.6-nif-2.15-x86_64-apple-darwin--avx2.so.tar.gz" =>
-    "sha256:7e425a27259e5bcce25e8adac1c4c0323be215850f2e2cc63995b6e88fb2c790",
-  "librustycsv-v0.4.6-nif-2.15-x86_64-apple-darwin.so.tar.gz" =>
-    "sha256:7dc02ba26b6550b7320417bc74fc3eb9a5b0c1d28a4eaa3f0b93274857512250",
-  "librustycsv-v0.4.6-nif-2.15-x86_64-unknown-linux-gnu--avx2.so.tar.gz" =>
-    "sha256:52cd615a3770bcf6f9c0fa0f753f1d920f07bbc7ebddad362754a92b500659cc",
-  "librustycsv-v0.4.6-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:e6745dbf6e7a96b0bb221e115ee2135e1952bd3c6d73aeeb82397f32ab32c040",
-  "librustycsv-v0.4.6-nif-2.15-x86_64-unknown-linux-musl--avx2.so.tar.gz" =>
-    "sha256:abcfddbb492bccc0078fe54ce198ea83e3184f130b51a7dea5544e28fb5fb171",
-  "librustycsv-v0.4.6-nif-2.15-x86_64-unknown-linux-musl.so.tar.gz" =>
-    "sha256:b354bc6fb805be6a6770bce24542c07ed6bd05bce4c746994e8dad9a6d7b8472",
-  "librustycsv-v0.4.6-nif-2.16-aarch64-apple-darwin.so.tar.gz" =>
-    "sha256:15274b5d10fbde3cb42c3f5f403c0367c6ba0521882d20ddb813e362fe1fcc36",
-  "librustycsv-v0.4.6-nif-2.16-aarch64-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:1adc30547a0629c1fa942f574976c9cfb69b1e23f68b484220b3393f37e9b780",
-  "librustycsv-v0.4.6-nif-2.16-aarch64-unknown-linux-musl.so.tar.gz" =>
-    "sha256:c7a1f3c8556dda9eb9268571a7733bf803e11be8f346bf0c0f24d8baea7d5a33",
-  "librustycsv-v0.4.6-nif-2.16-arm-unknown-linux-gnueabihf.so.tar.gz" =>
-    "sha256:1fbe5310a3c58e2ff6c8eb6cc91edd7471feca12ff652f0ad75454f7a68f85a1",
-  "librustycsv-v0.4.6-nif-2.16-riscv64gc-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:9c140c3de790a4e98ae71f9d768fb3cdd87e03690d39b153eb1c2bd21708ddc9",
-  "librustycsv-v0.4.6-nif-2.16-x86_64-apple-darwin--avx2.so.tar.gz" =>
-    "sha256:1341d9affab2fb19be8ee4cc79dc078dd1ff5a52c3abc116befbbbe1bd6b99d1",
-  "librustycsv-v0.4.6-nif-2.16-x86_64-apple-darwin.so.tar.gz" =>
-    "sha256:67b1c80d2b51ceb31820818e203d6fd99e64a65589e02f503279bb53fe7e091f",
-  "librustycsv-v0.4.6-nif-2.16-x86_64-unknown-linux-gnu--avx2.so.tar.gz" =>
-    "sha256:84bf5b5b3063950cb6ae621caa498300afe5582e5bcd22ffc84129e7a0c05b9d",
-  "librustycsv-v0.4.6-nif-2.16-x86_64-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:136bb4c450a096e098ca5f8d508586d778b05b94f54cfa2b8cb525555c1dca27",
-  "librustycsv-v0.4.6-nif-2.16-x86_64-unknown-linux-musl--avx2.so.tar.gz" =>
-    "sha256:67e6c22670f398cc035debf3cfdd4d39fb321a435e0aaa64e416a341bcd27073",
-  "librustycsv-v0.4.6-nif-2.16-x86_64-unknown-linux-musl.so.tar.gz" =>
-    "sha256:d22230bc78f950fe4e1bd7ed326317ef5cea1f2b27b2e2306f4b8fe7c543bf31",
-  "librustycsv-v0.4.6-nif-2.17-aarch64-apple-darwin.so.tar.gz" =>
-    "sha256:5524cff67c0867a1bf91ae923d3383595b1d6cfd355a0ea160f2d3a4cec889fa",
-  "librustycsv-v0.4.6-nif-2.17-aarch64-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:c4371a3fa304c12358bac3f7b34f9a69f5ccc0f64ef67a146ca629932f06e75d",
-  "librustycsv-v0.4.6-nif-2.17-aarch64-unknown-linux-musl.so.tar.gz" =>
-    "sha256:f147bf5672781409de392b82a22a67a81b417b75450af891b20048a6ee696d47",
-  "librustycsv-v0.4.6-nif-2.17-arm-unknown-linux-gnueabihf.so.tar.gz" =>
-    "sha256:f8fd989e6c8f9d9e9b8c6e3bab8a446a3d551dccde11ed531cf0a55cda702a15",
-  "librustycsv-v0.4.6-nif-2.17-riscv64gc-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:08227524e293124c583149c667c63be23acd447a203154cf49e68bf4ec7975c5",
-  "librustycsv-v0.4.6-nif-2.17-x86_64-apple-darwin--avx2.so.tar.gz" =>
-    "sha256:66648d33c31373f9d0d719f69a236fd15c0429a35e423ac0061e9ec6abd28d70",
-  "librustycsv-v0.4.6-nif-2.17-x86_64-apple-darwin.so.tar.gz" =>
-    "sha256:34a073787d129e1f975c11ac7eee52a53e38392bb5861d886f9c78bcdff4c4b9",
-  "librustycsv-v0.4.6-nif-2.17-x86_64-unknown-linux-gnu--avx2.so.tar.gz" =>
-    "sha256:5afb46167e05e8d857cb4c485051be87c1c976505d8041101b59b093c657445d",
-  "librustycsv-v0.4.6-nif-2.17-x86_64-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:4193b815a26f2e341f033b7498a3b34525ad74a570cea56e7d7d5b5af9f211df",
-  "librustycsv-v0.4.6-nif-2.17-x86_64-unknown-linux-musl--avx2.so.tar.gz" =>
-    "sha256:12dd7e1e80f500b3e31044ef42701e24ef34f0fd3d95fc3c27faaf1f6d701e2f",
-  "librustycsv-v0.4.6-nif-2.17-x86_64-unknown-linux-musl.so.tar.gz" =>
-    "sha256:75998eb3bef232b9c9f70cca39b6e20bd1ed698f5a5ccbb06b9b2a4fd22a4215",
-  "rustycsv-v0.4.6-nif-2.15-x86_64-pc-windows-gnu--avx2.dll.tar.gz" =>
-    "sha256:107b5ab3e489630d7cd76bddf986a3fee8ec395f7a1c167a41e3049fb20e3883",
-  "rustycsv-v0.4.6-nif-2.15-x86_64-pc-windows-gnu.dll.tar.gz" =>
-    "sha256:e5015744f07f68e7ca22c364675374f7754230506cb537b9934d043f88d0ce37",
-  "rustycsv-v0.4.6-nif-2.15-x86_64-pc-windows-msvc--avx2.dll.tar.gz" =>
-    "sha256:bedf1498b968f35a94ef8a229b2710d0a77d221d3bda6aa2908daa525cdd7160",
-  "rustycsv-v0.4.6-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" =>
-    "sha256:906fa22184ad9a8777910b251d21e8b11d47a2c0e04996e905c72567c650da10",
-  "rustycsv-v0.4.6-nif-2.16-x86_64-pc-windows-gnu--avx2.dll.tar.gz" =>
-    "sha256:7fada9e7629914567ad4753fa5c6ac5d02cc3fde4f9f2a38cdae6e807e42abd7",
-  "rustycsv-v0.4.6-nif-2.16-x86_64-pc-windows-gnu.dll.tar.gz" =>
-    "sha256:fdb65f8d7b89ca5f634e40856621be22bd3ea4c5205559fa6b352ebc9260ff90",
-  "rustycsv-v0.4.6-nif-2.16-x86_64-pc-windows-msvc--avx2.dll.tar.gz" =>
-    "sha256:f79537728aa857ec33c22239faead539e4de7deab71639e2f0ee092f4e306fa8",
-  "rustycsv-v0.4.6-nif-2.16-x86_64-pc-windows-msvc.dll.tar.gz" =>
-    "sha256:bb8b0b6523c3355edea09f02970296ed68924937453228614076a92105f02f00",
-  "rustycsv-v0.4.6-nif-2.17-x86_64-pc-windows-gnu--avx2.dll.tar.gz" =>
-    "sha256:7289150bbeb173e45b97904e8ccd932d1e3d26a6ae05589a934d7e82b2c7598f",
-  "rustycsv-v0.4.6-nif-2.17-x86_64-pc-windows-gnu.dll.tar.gz" =>
-    "sha256:cc735b3aba0989f6eb9853fd5a782c3d1069d913c5747e5c2d75f2487dfd3b9d",
-  "rustycsv-v0.4.6-nif-2.17-x86_64-pc-windows-msvc--avx2.dll.tar.gz" =>
-    "sha256:82daf753713499331539e4b9bf043cdfcf59cb6c98bbe8389650d54c21e152fa",
-  "rustycsv-v0.4.6-nif-2.17-x86_64-pc-windows-msvc.dll.tar.gz" =>
-    "sha256:7d65035232fef84815c63c0bfae758624bc1efe4e53182c2d8989ea1b6b0fd87"
+  "librustycsv-v0.5.0-nif-2.15-aarch64-apple-darwin.so.tar.gz" => "sha256:de2cba61262af450e1ea4d82dbacf99a4c9f11b22391bcb74c93f63957c3571a",
+  "librustycsv-v0.5.0-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:ab1c395026f16e70204fe0d3ab2ae925aefc353f86bd95e4795f6d195ce7ee97",
+  "librustycsv-v0.5.0-nif-2.15-aarch64-unknown-linux-musl.so.tar.gz" => "sha256:4ca315d52a900586ba9c773a8866f20135a1cab442ef7a3cf1b643391ab2509d",
+  "librustycsv-v0.5.0-nif-2.15-arm-unknown-linux-gnueabihf.so.tar.gz" => "sha256:4b76d39061c3f5b4832e01dcbf0a685713cfa1ceead829562e0ad99368de6bb0",
+  "librustycsv-v0.5.0-nif-2.15-riscv64gc-unknown-linux-gnu.so.tar.gz" => "sha256:33b1707b94c0b3d3e12e011c72f5fe94429105ddbd2aac1e2737ed7a81f1cfd5",
+  "librustycsv-v0.5.0-nif-2.15-x86_64-apple-darwin--avx2.so.tar.gz" => "sha256:e3b9799fd750e54e71e58eb558bae448c8bcc6732e15536b8be7a2a5c809f41f",
+  "librustycsv-v0.5.0-nif-2.15-x86_64-apple-darwin.so.tar.gz" => "sha256:8c4cf2cf3385d140b90cf2bd4ab5f9b5da1563c204ff88f2b3cc491efd26d0bc",
+  "librustycsv-v0.5.0-nif-2.15-x86_64-unknown-linux-gnu--avx2.so.tar.gz" => "sha256:39c577eb599349c6377d2d9d0ce1679dd38c334a0d0f5ed6f5f24a5af0717044",
+  "librustycsv-v0.5.0-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:288a88ba1a1c9b94bfee410e1cd2173871c155b2fd38091a6633c13c3f6de745",
+  "librustycsv-v0.5.0-nif-2.15-x86_64-unknown-linux-musl--avx2.so.tar.gz" => "sha256:536849fc86a411611169cac0649660648fcfa2ebd6ce071504a4cc79741d47f6",
+  "librustycsv-v0.5.0-nif-2.15-x86_64-unknown-linux-musl.so.tar.gz" => "sha256:bef8cff7f14f174efdd82727e0455e7a99f4cb2dc2fef8fc43843278670fab0e",
+  "librustycsv-v0.5.0-nif-2.16-aarch64-apple-darwin.so.tar.gz" => "sha256:3b8f979463e8f482778f4257d4aa5e6b71f8959a324a83da09275f4895abcfc0",
+  "librustycsv-v0.5.0-nif-2.16-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:f54eeb3ca01c9d7b90c27d995c56dc7c47c0d13db45b1ee50102628f9699ca62",
+  "librustycsv-v0.5.0-nif-2.16-aarch64-unknown-linux-musl.so.tar.gz" => "sha256:76436d42effdca55bddee1b1ebb68dc49e2437aebd00d60f7101b19ddee3d194",
+  "librustycsv-v0.5.0-nif-2.16-arm-unknown-linux-gnueabihf.so.tar.gz" => "sha256:f9e0cfc18e3c07a8977706fa6462b3ba20a12be540ae53fab683258a55f0e748",
+  "librustycsv-v0.5.0-nif-2.16-riscv64gc-unknown-linux-gnu.so.tar.gz" => "sha256:0c74aa0fcccf10fd67dd91fd036ce7d8b725eb9ae63f0a85a3704c5fe0cf6fd6",
+  "librustycsv-v0.5.0-nif-2.16-x86_64-apple-darwin--avx2.so.tar.gz" => "sha256:6c1b865195edd8d1eede331ea44790fa6fd77f1a1bd706e955ee621ea4ac1688",
+  "librustycsv-v0.5.0-nif-2.16-x86_64-apple-darwin.so.tar.gz" => "sha256:1bd939054864f523f5f183b4b4ddc9d48f13e74893f8f6455682475973b1dfd1",
+  "librustycsv-v0.5.0-nif-2.16-x86_64-unknown-linux-gnu--avx2.so.tar.gz" => "sha256:fe604452e17791422e4b0731606af03b839628f890976d2615d7384ca0c3c931",
+  "librustycsv-v0.5.0-nif-2.16-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:97763b00c055b21e636285ee61a7891c8473a529a0381ca4850ac5ff9871debf",
+  "librustycsv-v0.5.0-nif-2.16-x86_64-unknown-linux-musl--avx2.so.tar.gz" => "sha256:daf647a7a6f13c2bf00882763617b281b6e9f8670cbabf8e333926efb9540608",
+  "librustycsv-v0.5.0-nif-2.16-x86_64-unknown-linux-musl.so.tar.gz" => "sha256:eef6c9c41f89c951ba1f649caf918764cc274b914842017a1c2ac55dc3e576f7",
+  "librustycsv-v0.5.0-nif-2.17-aarch64-apple-darwin.so.tar.gz" => "sha256:28a80df43e85f1eab3725e2b8ad512ae160dee515260320620a062c2c88ab764",
+  "librustycsv-v0.5.0-nif-2.17-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:98c72d2895fca934fc2325b2178cded62ba8b002d8da44c1fa13608d6dffb1de",
+  "librustycsv-v0.5.0-nif-2.17-aarch64-unknown-linux-musl.so.tar.gz" => "sha256:9df109af8fbc7bfcaf407d34f65a182c653a569b67ec477cacb63bc7e92db022",
+  "librustycsv-v0.5.0-nif-2.17-arm-unknown-linux-gnueabihf.so.tar.gz" => "sha256:2e3dbd0c1253648499cf6694e25ea87d5edf6f487b4626e20565d4be0db2fe63",
+  "librustycsv-v0.5.0-nif-2.17-riscv64gc-unknown-linux-gnu.so.tar.gz" => "sha256:726010046779a97c91732de4dec378a1ad56e4b7d212caffab4142afeba80b71",
+  "librustycsv-v0.5.0-nif-2.17-x86_64-apple-darwin--avx2.so.tar.gz" => "sha256:ec55912f365bce1fdce42a782abe1348fcf70bd39847050bdb7ee53e8eaa3fca",
+  "librustycsv-v0.5.0-nif-2.17-x86_64-apple-darwin.so.tar.gz" => "sha256:d2811a5846b529da26afced6bdb6155f6cae0bf9398d50a36000dd0eeab4111d",
+  "librustycsv-v0.5.0-nif-2.17-x86_64-unknown-linux-gnu--avx2.so.tar.gz" => "sha256:bd3a1155bb5e2c6cf0163e91c6c49fb0bf1496ed92498785e5745f4344a6bddd",
+  "librustycsv-v0.5.0-nif-2.17-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:15f459e24f5bc8ccf9711c7a012076b821584d76635e34e4d6c7fb463bbf991c",
+  "librustycsv-v0.5.0-nif-2.17-x86_64-unknown-linux-musl--avx2.so.tar.gz" => "sha256:51132ad7065bf34640de76e72487aaed8907791ab58348b03ac6af18f2685a09",
+  "librustycsv-v0.5.0-nif-2.17-x86_64-unknown-linux-musl.so.tar.gz" => "sha256:20807aa6cf5205b5f169fb37c5fc9b5f9b513b7fae5d6ec580515b9d1b93443c",
+  "librustycsv-v0.5.0-nif-2.18-aarch64-apple-darwin.so.tar.gz" => "sha256:3bef22a5b1f4403ff88e0de489aebe15dc4c9c9e491e36c1faa7b6a53f306f30",
+  "librustycsv-v0.5.0-nif-2.18-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:e53a8b77393deff0da782cd4d587bb647f39fb50ed655b5fbdc7695ebad7113b",
+  "librustycsv-v0.5.0-nif-2.18-aarch64-unknown-linux-musl.so.tar.gz" => "sha256:63182a3e47fcb91e4759a9cdbdd226bb479f20d3bf48ee9a5f834f4737967bf5",
+  "librustycsv-v0.5.0-nif-2.18-arm-unknown-linux-gnueabihf.so.tar.gz" => "sha256:54fd6649d2f7d0db875da3f98a59c5c14e40cec964711c5377389589b4533588",
+  "librustycsv-v0.5.0-nif-2.18-riscv64gc-unknown-linux-gnu.so.tar.gz" => "sha256:236a4276ebbeeec35b40ad5805cae66c955eec3153f2c507153cb1614d5995de",
+  "librustycsv-v0.5.0-nif-2.18-x86_64-apple-darwin--avx2.so.tar.gz" => "sha256:82f327f1c86c5cf29f2b982ad932d392c0f6f782cbf4b243bde79027f548bcff",
+  "librustycsv-v0.5.0-nif-2.18-x86_64-apple-darwin.so.tar.gz" => "sha256:1fcbd3da0a5a8a9017a43773b0a4367848467dccd1028ffe1685d485ba48b9c6",
+  "librustycsv-v0.5.0-nif-2.18-x86_64-unknown-linux-gnu--avx2.so.tar.gz" => "sha256:0ed96a6d14e9a1c36d6195369b7ad78e1369c292646299259a615889ca5faf29",
+  "librustycsv-v0.5.0-nif-2.18-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:cea5cb5052c0fc25d4495e505557f04f2ccb19a949bab84396152678a0bc6c11",
+  "librustycsv-v0.5.0-nif-2.18-x86_64-unknown-linux-musl--avx2.so.tar.gz" => "sha256:441c6d9c28646c8e4b87286db66440de7d6f7e6db4918c17a39b85b5f580f699",
+  "librustycsv-v0.5.0-nif-2.18-x86_64-unknown-linux-musl.so.tar.gz" => "sha256:826dd3c912d0e8ee6b421f06a1692c0468a9a9cc29cdd33588dcf2f220b29976",
+  "rustycsv-v0.5.0-nif-2.15-x86_64-pc-windows-gnu--avx2.dll.tar.gz" => "sha256:29b97c4460d15c78832dcdf753ad4a4b0ec70088d3097d2d2ecfd1eb1d4f0692",
+  "rustycsv-v0.5.0-nif-2.15-x86_64-pc-windows-gnu.dll.tar.gz" => "sha256:2a143957b031521370f425d12124eefe4afb8d67c3d0df26432d521caf77f01f",
+  "rustycsv-v0.5.0-nif-2.15-x86_64-pc-windows-msvc--avx2.dll.tar.gz" => "sha256:990ed0ba2b7927dfc9e80e44b318e102ee25c5478d69a002183bb47b7998d7e7",
+  "rustycsv-v0.5.0-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:039548ea110e4927ecfc6a5a83fdb2aa0805b80e34279df7ca1f704e87eaee00",
+  "rustycsv-v0.5.0-nif-2.16-x86_64-pc-windows-gnu--avx2.dll.tar.gz" => "sha256:5064272cb53f439fd06645feb5b5be47dadfe25793e0e4f0ff04e0db1fef5379",
+  "rustycsv-v0.5.0-nif-2.16-x86_64-pc-windows-gnu.dll.tar.gz" => "sha256:b516a5502c6ba09f3d4ad982f07c475cdd28eac5bf57660598daefef31fa97ee",
+  "rustycsv-v0.5.0-nif-2.16-x86_64-pc-windows-msvc--avx2.dll.tar.gz" => "sha256:6070ce5ca2958d11081c905d3df36be508e4526413aa0da3a09879648a2c6fec",
+  "rustycsv-v0.5.0-nif-2.16-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:3929450f79ebaf8749021008b07f4d5d41dbee0d60d72d1fe61aa71e010a8671",
+  "rustycsv-v0.5.0-nif-2.17-x86_64-pc-windows-gnu--avx2.dll.tar.gz" => "sha256:0a0291262c87c68acdb52b37be7ebba7f8544524e80e9d047d123c65c6d01af2",
+  "rustycsv-v0.5.0-nif-2.17-x86_64-pc-windows-gnu.dll.tar.gz" => "sha256:8d03362079fc1af036d49c210a9278175a7754b3d8c0151c7ff408d4377a5367",
+  "rustycsv-v0.5.0-nif-2.17-x86_64-pc-windows-msvc--avx2.dll.tar.gz" => "sha256:3fb349c9812f1f524e508554315e9c75e6b1d58efb4f9e06d5dd8d0e3daa3c60",
+  "rustycsv-v0.5.0-nif-2.17-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:7df8b9d65a878c1c166c07e57232bce73a3f51025263ca8b4ff80b91e21d72d5",
+  "rustycsv-v0.5.0-nif-2.18-x86_64-pc-windows-gnu--avx2.dll.tar.gz" => "sha256:b9f86bc1ebe1d9da5b8bd465c5ab59824001d8c357cddd290f2c618653c021c7",
+  "rustycsv-v0.5.0-nif-2.18-x86_64-pc-windows-gnu.dll.tar.gz" => "sha256:3097e21195f472d4f6a41aac0744808eab2e8dd40b054affa0460d4f500126f1",
+  "rustycsv-v0.5.0-nif-2.18-x86_64-pc-windows-msvc--avx2.dll.tar.gz" => "sha256:ff1fea450f2a4806b7911788df251e14c87f84899123c1e776ac8aac7015f04a",
+  "rustycsv-v0.5.0-nif-2.18-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:8f732ef094b23e0963c9692063bdfd4b4f6af824a12bbaf987fdc8a2efe1872e",
 }
